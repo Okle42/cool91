@@ -64,6 +64,10 @@ Claude Code 的 PreToolUse hook 可以在每次執行 Bash 前跑一支程式決
 
 hook 本身不開 SMC、不跑 powermetrics，只讀 guard 每 5 秒寫的 JSON 快照，每次 9 ms。
 
+## 對外
+
+- 2026-09-16 對 macmon 開了 issue [#78](https://github.com/vladkens/macmon/issues/78)（頻率那條），等社群在其他晶片上驗證。
+
 ## 沒驗證的
 
 - 只有一台 M4 mini（n = 1）。M4 Pro / Max、M3、M5 是否相同未測。

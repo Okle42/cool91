@@ -1,4 +1,6 @@
-# Draft: issue for vladkens/macmon
+# Issue for vladkens/macmon
+
+**Posted 2026-09-16 as https://github.com/vladkens/macmon/issues/78**
 
 **Title**
 
