@@ -2,15 +2,15 @@ import Foundation
 import CSMC
 
 /// Swift 端 SMC 封裝：負責型別解碼與感測器掃描
-enum SMC {
-    struct Value {
-        let key: String
-        let type: String
-        let size: Int
-        let raw: [UInt8]
+public enum SMC {
+    public struct Value {
+        public let key: String
+        public let type: String
+        public let size: Int
+        public let raw: [UInt8]
 
         /// 依 SMC 資料型別解碼為 Double（無法解碼回傳 nil）
-        var double: Double? {
+        public var double: Double? {
             switch type {
             case "flt ":
                 guard size == 4 else { return nil }
@@ -28,14 +28,14 @@ enum SMC {
         }
     }
 
-    static func open() throws {
+    public static func open() throws {
         let kr = smc_open()
         if kr != 0 { throw Cool91Error.smc("smc_open 失敗 kr=\(kr)") }
     }
 
-    static func close() { smc_close() }
+    public static func close() { smc_close() }
 
-    static func read(_ key: String) -> Value? {
+    public static func read(_ key: String) -> Value? {
         var type: UInt32 = 0, size: UInt32 = 0
         var bytes = [UInt8](repeating: 0, count: 32)
         let kr = key.withCString { smc_read($0, &type, &size, &bytes) }
@@ -44,23 +44,23 @@ enum SMC {
         return Value(key: key, type: t, size: Int(size), raw: Array(bytes.prefix(Int(size))))
     }
 
-    static func readDouble(_ key: String) -> Double? { read(key)?.double }
+    public static func readDouble(_ key: String) -> Double? { read(key)?.double }
 
-    static func write(_ key: String, bytes: [UInt8]) throws {
+    public static func write(_ key: String, bytes: [UInt8]) throws {
         let kr = key.withCString { smc_write($0, UInt32(bytes.count), bytes) }
         if kr != 0 { throw Cool91Error.smc("寫入 \(key) 失敗 (\(kr))；寫 SMC 需要 sudo") }
     }
 
-    static func writeFloat(_ key: String, _ v: Float32) throws {
+    public static func writeFloat(_ key: String, _ v: Float32) throws {
         var f = v
         let b = withUnsafeBytes(of: &f) { Array($0) }
         try write(key, bytes: b)
     }
 
-    static func writeUInt8(_ key: String, _ v: UInt8) throws { try write(key, bytes: [v]) }
+    public static func writeUInt8(_ key: String, _ v: UInt8) throws { try write(key, bytes: [v]) }
 
     /// 列出所有 key 名稱
-    static func allKeys() -> [String] {
+    public static func allKeys() -> [String] {
         let n = smc_key_count()
         guard n > 0 else { return [] }
         var out: [String] = []
@@ -72,7 +72,7 @@ enum SMC {
     }
 
     /// 掃描看起來像溫度的感測器：T 開頭、flt/sp78 型別、值在合理範圍
-    static func scanTemperatureKeys() -> [(String, Double)] {
+    public static func scanTemperatureKeys() -> [(String, Double)] {
         allKeys().filter { $0.hasPrefix("T") }.compactMap { k in
             guard let v = read(k), v.type == "flt " || v.type == "sp78", let d = v.double, d > 10, d < 120 else { return nil }
             return (k, d)
@@ -81,18 +81,18 @@ enum SMC {
 
     // MARK: 風扇
 
-    static var fanCount: Int { Int(readDouble("FNum") ?? 0) }
+    public static var fanCount: Int { Int(readDouble("FNum") ?? 0) }
 
-    struct Fan {
-        let index: Int
-        let actual: Double
-        let min: Double
-        let max: Double
-        let target: Double
-        let manual: Bool
+    public struct Fan {
+        public let index: Int
+        public let actual: Double
+        public let min: Double
+        public let max: Double
+        public let target: Double
+        public let manual: Bool
     }
 
-    static func fan(_ i: Int) -> Fan? {
+    public static func fan(_ i: Int) -> Fan? {
         guard let a = readDouble("F\(i)Ac") else { return nil }
         return Fan(index: i,
                    actual: a,
@@ -102,24 +102,24 @@ enum SMC {
                    manual: (readDouble("F\(i)Md") ?? 0) != 0)
     }
 
-    static func fans() -> [Fan] { (0..<fanCount).compactMap(fan) }
+    public static func fans() -> [Fan] { (0..<fanCount).compactMap(fan) }
 
     /// 手動設定目標轉速（需 root）
-    static func setFan(_ i: Int, rpm: Double) throws {
+    public static func setFan(_ i: Int, rpm: Double) throws {
         try writeUInt8("F\(i)Md", 1)
         try writeFloat("F\(i)Tg", Float32(rpm))
     }
 
     /// 交還 SMC 自動控制（需 root）
-    static func setFanAuto(_ i: Int) throws {
+    public static func setFanAuto(_ i: Int) throws {
         try writeUInt8("F\(i)Md", 0)
     }
 }
 
-enum Cool91Error: Error, CustomStringConvertible {
+public enum Cool91Error: Error, CustomStringConvertible {
     case smc(String)
     case usage(String)
-    var description: String {
+    public var description: String {
         switch self {
         case .smc(let s), .usage(let s): return s
         }

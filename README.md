@@ -6,6 +6,16 @@
 
 實測（Mac mini M4）：guard 常駐 **0.1% CPU / 8 MB 記憶體**；`cool91 check` 單次 0.18 秒。
 
+## 三個部分
+
+| 元件 | 身分 | 負載 | 做什麼 |
+|---|---|---|---|
+| `cool91 guard` | root LaunchDaemon | 0.1% CPU / 8 MB | 每 5 秒依曲線寫風扇，快照寫到 `/tmp/cool91.json` |
+| `cool91 hook` | Claude Code PreToolUse(Bash) | 讀 state 檔，≈0 | hot 等降溫、critical 擋工具 |
+| `cool91 Panel.app` | 選單列（使用者層級） | 每 3 秒讀 state 檔 | 看溫度/風扇/曲線圖，切模式、改曲線 → 存回 config，guard 熱重載 |
+
+另外 `~/.claude/scripts/statusline.py` 會顯示 `🌡96°🌀3400`（同樣只讀 state 檔）。
+
 ## 架構
 
 ```
@@ -30,11 +40,19 @@ guard 每輪把快照寫到 /tmp/cool91.json（644）→ hook / check 直接讀�
 ## 安裝
 
 ```bash
-./install.sh          # release build → /usr/local/bin/cool91 → LaunchDaemon（需 sudo）
-./install-hook.py     # 把 PreToolUse hook 合併進 ~/.claude/settings.json
+./install.sh     # 一鍵：release build → CLI → LaunchDaemon(sudo) → Claude Code hook → 選單列面板
+./uninstall.sh   # 全部移除，風扇交還 SMC
 ```
 
-**先退出 Macs Fan Control**，否則兩者互搶風扇控制。
+**先退出 Macs Fan Control（含選單列常駐）**，install.sh 偵測到會拒絕安裝。
+
+## 模式（面板可切，或改 `/etc/cool91/config.json` 的 `mode`）
+
+- `curve`：依溫度曲線（預設）。低於曲線最低點 5°C 以上會交還 SMC 省電
+- `fixed`：固定 `fixedRPM`
+- `auto`：完全交還 macOS（M4 mini 預設很保守：實測 CPU 100°C 風扇才 1400 rpm）
+
+面板內建三組曲線：安靜 / 均衡 / 強力，也可逐點自訂。
 
 ## 常用指令
 
@@ -62,8 +80,9 @@ tail -f /var/log/cool91.log
 
 M4 已知分組：`Tp*` P-core、`Te*` E-core、`Tg*` GPU、`TH0*` SSD、`TCMz` SoC 綜合最高值。
 
-## 安全
+## 安全（不會把風扇操爆）
 
+- 轉速上限直接讀韌體回報的 `F0Mx`（M4 mini = 4900 rpm），任何模式的目標都夾在 `F0Mn`–`F0Mx`，程式上寫不出更高的值；SMC 韌體本身也會再夾一次
 - guard 收到 SIGTERM/SIGINT/SIGHUP 一律把風扇交還 SMC 自動（`F0Md=0`）
-- 目標轉速永遠夾在 `F0Mn`–`F0Mx` 之間
 - 只寫 `F?Md` / `F?Tg` 兩個 key，不碰其他 SMC 值
+- 面板與 hook 純讀取，不需 root

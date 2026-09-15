@@ -1,4 +1,5 @@
 import Foundation
+import Cool91Core
 
 // cool91 — Apple Silicon 風扇/溫度守門員，給 Claude Code 當把關工具用
 // 子命令：status | sensors | fan | guard | check | wait | hook | chip
@@ -157,8 +158,8 @@ func runHook(config: Config) {
     exit(0)
 }
 
-/// 常駐控制迴圈（需 root 才能寫 SMC）
-func runGuard(config: Config, dryRun: Bool, interval: Double) throws {
+/// 常駐控制迴圈（需 root 才能寫 SMC）。config 檔改動會自動重載（面板改模式/曲線即時生效）
+func runGuard(config initial: Config, dryRun: Bool, interval: Double) throws {
     let isRoot = getuid() == 0
     if !isRoot && !dryRun {
         throw Cool91Error.usage("guard 需要 root 才能寫風扇（sudo cool91 guard），或加 --dry-run 只觀察")
@@ -168,6 +169,10 @@ func runGuard(config: Config, dryRun: Bool, interval: Double) throws {
     }
     let fanCount = SMC.fanCount
     guard fanCount > 0 else { throw Cool91Error.smc("找不到風扇（FNum=0）") }
+
+    var config = initial
+    var configMtime = Config.mtime(config.loadedFrom)
+    func log(_ m: String) { FileHandle.standardError.write((m + "\n").data(using: .utf8)!) }
 
     // 收到終止訊號時把風扇交還 SMC
     var stopping = false
@@ -183,39 +188,57 @@ func runGuard(config: Config, dryRun: Bool, interval: Double) throws {
     }
 
     var lastTarget: Double = -1
-    var auto = true
-    var smoothed: Double? = nil   // 溫度 EMA，抑制單次取樣抖動
-    FileHandle.standardError.write("cool91 guard 啟動（\(chipName())，\(fanCount) 顆風扇，每 \(interval)s，\(dryRun ? "dry-run" : "控制中")）\n".data(using: .utf8)!)
+    var auto = true              // 目前是否交還 SMC 自動
+    var smoothed: Double? = nil  // 溫度 EMA，抑制單次取樣抖動
+    log("cool91 guard 啟動（\(chipName())，\(fanCount) 顆風扇，每 \(interval)s，模式 \(config.mode)，\(dryRun ? "dry-run" : "控制中")）")
 
     while !stopping {
+        // 設定檔熱重載
+        if let m = Config.mtime(config.loadedFrom), m != configMtime {
+            config = Config.load(path: config.loadedFrom)
+            configMtime = m
+            smoothed = nil; lastTarget = -1
+            log("設定已重載：模式 \(config.mode)，曲線 \(config.curve.map { "\(Int($0.temp))→\(Int($0.rpm))" }.joined(separator: " "))")
+        }
+
         var s = Snapshot.take(config: config)
         smoothed = smoothed.map { $0 * (1 - config.smoothing) + s.cpuMax * config.smoothing } ?? s.cpuMax
-        let want = config.rpm(for: smoothed!)
         let fmin = s.fans.first?.min ?? 0
-        let fmax = s.fans.first?.max ?? want
-        let target = min(max(want, fmin), fmax)
-
-        // 低於曲線最低點就交還自動，讓 SMC 自己省電；否則手動設定
+        let fmax = s.fans.first?.max ?? 5000
         let curveMin = config.curve.map(\.temp).min() ?? 0
-        if s.cpuMax < curveMin - 5 {
-            if !auto {
-                if !dryRun { restore() }
-                auto = true; lastTarget = -1
+
+        // 決定目標：nil = 交還自動
+        var desired: Double? = nil
+        switch config.mode {
+        case "auto":
+            desired = nil
+        case "fixed":
+            desired = config.fixedRPM
+        default: // curve；低於曲線最低點 5°C 以上就交還自動讓 SMC 省電
+            desired = smoothed! < curveMin - 5 ? nil : config.rpm(for: smoothed!)
+        }
+        // 任何來源的目標都夾在韌體回報的 F0Mn–F0Mx 之間，永遠不會超轉
+        let target = desired.map { min(max($0, fmin), fmax) }
+
+        if let target {
+            if abs(target - lastTarget) >= config.deadband || auto {
+                if !dryRun { for i in 0..<fanCount { try SMC.setFan(i, rpm: target) } }
+                lastTarget = target; auto = false
             }
-        } else if abs(target - lastTarget) >= config.deadband || auto {
-            if !dryRun { for i in 0..<fanCount { try SMC.setFan(i, rpm: target) } }
-            lastTarget = target; auto = false
+        } else if !auto {
+            restore(); auto = true; lastTarget = -1
         }
 
         s.guardRunning = true
+        s.guardMode = config.mode
         s.guardTargetRPM = auto ? nil : lastTarget
         s.save()
         if dryRun || s.level >= .hot {
-            FileHandle.standardError.write("\(s.short) → 目標 \(auto ? "auto" : "\(Int(lastTarget)) rpm")\n".data(using: .utf8)!)
+            log("\(s.short) → 目標 \(auto ? "auto" : "\(Int(lastTarget)) rpm")")
         }
         RunLoop.main.run(until: Date().addingTimeInterval(interval))
     }
     restore()
     var s = Snapshot.take(config: config); s.guardRunning = false; s.save()
-    FileHandle.standardError.write("cool91 guard 結束，風扇已交還自動\n".data(using: .utf8)!)
+    log("cool91 guard 結束，風扇已交還自動")
 }
