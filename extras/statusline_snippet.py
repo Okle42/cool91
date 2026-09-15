@@ -13,7 +13,7 @@ def cool91_segment():
         seg = f"\033[{color}m🌡{st['cpuMax']:.0f}°\033[0m"
         if rpm:
             seg += f"\033[2m🌀{rpm:.0f}\033[0m"
-        if st.get("pcoreMHz"):
+        if (st.get("pcoreMHz") or 0) >= 100:
             throttled = st.get("thermalPressure") not in (None, "Nominal")
             seg += f"\033[{'91' if throttled else '2'}m⚡{st['pcoreMHz']/1000:.1f}G{'↓' if throttled else ''}\033[0m"
         return seg

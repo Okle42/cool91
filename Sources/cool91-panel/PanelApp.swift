@@ -197,10 +197,11 @@ struct PanelView: View {
             tile("GPU", String(format: "%.0f°", s.gpuMax), sub: "最高", color: .blue)
             tile("SSD", String(format: "%.0f°", s.ssd ?? 0), sub: "", color: .teal)
             if let p = s.pcoreMHz {
-                // P-core 硬體頻率：M4 滿載正常 3.9–4.4，掉到 3.8 以下且 pressure 非 Nominal = 熱降頻
-                tile("P-core", String(format: "%.2f", p / 1000),
-                     sub: s.throttling ? "降頻 " + (s.thermalPressure ?? "") : String(format: "GHz · E %.1f", (s.ecoreMHz ?? 0) / 1000),
-                     color: s.throttling ? .red : .purple)
+                // P-core 硬體頻率：M4 滿載正常 3.9–4.4，掉到 3.8 以下且 pressure 非 Nominal = 熱降頻；cluster 閒置時韌體回 0
+                let idle = p < 100
+                tile("P-core", idle ? "閒置" : String(format: "%.2f", p / 1000),
+                     sub: s.throttling ? "降頻 " + (s.thermalPressure ?? "") : idle ? "GHz" : String(format: "GHz · E %.1f", (s.ecoreMHz ?? 0) / 1000),
+                     color: s.throttling ? .red : idle ? .secondary : .purple)
             }
         }
     }
@@ -274,7 +275,7 @@ struct PanelView: View {
     var freqChart: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text("P-core 頻率（GHz）").font(.caption).foregroundStyle(.secondary)
-            Chart(monitor.history.filter { $0.pMHz != nil }, id: \.time) { p in
+            Chart(monitor.history.filter { ($0.pMHz ?? 0) >= 100 }, id: \.time) { p in   // 閒置（0）不畫，留缺口
                 LineMark(x: .value("t", p.time), y: .value("GHz", (p.pMHz ?? 0) / 1000), series: .value("s", "p")).foregroundStyle(.purple)
             }
             .chartYScale(domain: 0.9...4.5)
@@ -305,16 +306,27 @@ struct PanelView: View {
         .frame(maxWidth: .infinity)
     }
 
+    // MARK: 控制區
+
+    /// draft 曲線對應到哪個預設（沒有就是自訂）
+    var currentPresetName: String? {
+        let d = monitor.draft.curve.map { [$0.temp, $0.rpm] }
+        return Monitor.presets.first { $0.1.map { [$0.temp, $0.rpm] } == d }?.0
+    }
+
     @ViewBuilder
     func controls(_ s: Snapshot) -> some View {
         let fmin = s.fans.first?.min ?? 1000
         let fmax = s.fans.first?.max ?? 4900
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
+            // 標題列：模式 + 狀態
             HStack {
-                Text("控制").font(.caption).foregroundStyle(.secondary)
+                Text("風扇控制").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                 Spacer()
                 if !s.guardRunning {
-                    Text("guard 未執行，設定存了也不會生效").font(.caption2).foregroundStyle(.orange)
+                    Label("guard 未執行", systemImage: "exclamationmark.triangle.fill").font(.caption2).foregroundStyle(.orange)
+                } else if monitor.dirty {
+                    Text("未套用").font(.caption2).foregroundStyle(.orange)
                 }
             }
             Picker("模式", selection: Binding(get: { monitor.draft.mode }, set: { monitor.draft.mode = $0 })) {
@@ -325,57 +337,128 @@ struct PanelView: View {
             .pickerStyle(.segmented)
             .labelsHidden()
 
-            if monitor.draft.mode == "fixed" {
+            switch monitor.draft.mode {
+            case "fixed":
+                curvePreview(s, fixed: monitor.draft.fixedRPM, fmin: fmin, fmax: fmax)
                 HStack {
                     Slider(value: Binding(get: { monitor.draft.fixedRPM }, set: { monitor.draft.fixedRPM = ($0 / 50).rounded() * 50 }),
                            in: fmin...fmax)
                     Text("\(Int(monitor.draft.fixedRPM)) rpm").font(.system(.caption, design: .monospaced)).frame(width: 64, alignment: .trailing)
                 }
-            } else if monitor.draft.mode == "curve" {
-                HStack(spacing: 6) {
-                    ForEach(Monitor.presets, id: \.0) { name, pts in
-                        Button(name) { monitor.draft.curve = pts }
-                            .buttonStyle(.bordered).controlSize(.small)
-                    }
-                    Spacer()
-                }
-                DisclosureGroup("自訂曲線") {
-                    ForEach(monitor.draft.curve.indices, id: \.self) { i in
-                        HStack(spacing: 6) {
-                            Stepper(value: Binding(get: { monitor.draft.curve[i].temp }, set: { monitor.draft.curve[i].temp = $0 }), in: 40...105, step: 1) {
-                                Text("\(Int(monitor.draft.curve[i].temp))°").font(.system(.caption, design: .monospaced)).frame(width: 34, alignment: .trailing)
+            case "curve":
+                curvePreview(s, fixed: nil, fmin: fmin, fmax: fmax)
+                presetChips
+                DisclosureGroup {
+                    VStack(spacing: 4) {
+                        ForEach(monitor.draft.curve.indices, id: \.self) { i in
+                            HStack(spacing: 6) {
+                                Stepper(value: Binding(get: { monitor.draft.curve[i].temp }, set: { monitor.draft.curve[i].temp = $0 }), in: 40...105, step: 1) {
+                                    Text("\(Int(monitor.draft.curve[i].temp))°").font(.system(.caption, design: .monospaced)).frame(width: 34, alignment: .trailing)
+                                }
+                                Slider(value: Binding(get: { monitor.draft.curve[i].rpm }, set: { monitor.draft.curve[i].rpm = ($0 / 50).rounded() * 50 }),
+                                       in: fmin...fmax)
+                                Text("\(Int(monitor.draft.curve[i].rpm))").font(.system(.caption, design: .monospaced)).frame(width: 36, alignment: .trailing)
                             }
-                            Slider(value: Binding(get: { monitor.draft.curve[i].rpm }, set: { monitor.draft.curve[i].rpm = ($0 / 50).rounded() * 50 }),
-                                   in: fmin...fmax)
-                            Text("\(Int(monitor.draft.curve[i].rpm))").font(.system(.caption, design: .monospaced)).frame(width: 36, alignment: .trailing)
                         }
                     }
+                    .padding(.top, 4)
+                } label: {
+                    Text(currentPresetName.map { "微調「\($0)」的點" } ?? "編輯自訂曲線的點").font(.caption)
                 }
-                .font(.caption)
-            } else {
-                Text("風扇交回 macOS 自己管（M4 mini 預設很保守，CPU 常到 100°C 才加速）").font(.caption2).foregroundStyle(.secondary)
+            default:
+                Text("風扇交回 macOS 自己管。M4 mini 原廠策略很保守：CPU 到 100°C 才加速，重載 10–15 分鐘後會降頻。")
+                    .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
-            Toggle("GPU 溫度也納入控制與把關", isOn: Binding(get: { monitor.draft.includeGPU }, set: { monitor.draft.includeGPU = $0 }))
-                .toggleStyle(.checkbox).font(.caption)
 
-            HStack {
-                if let m = monitor.saveMessage { Text(m).font(.caption2).foregroundStyle(m.hasPrefix("寫入失敗") ? .red : .secondary) }
-                Spacer()
-                Button("還原") { monitor.revert() }.disabled(!monitor.dirty)
-                Button("套用") { monitor.apply() }.disabled(!monitor.dirty).keyboardShortcut(.defaultAction)
+            Toggle(isOn: Binding(get: { monitor.draft.includeGPU }, set: { monitor.draft.includeGPU = $0 })) {
+                Text("GPU 溫度也納入").font(.caption2).foregroundStyle(.secondary)
             }
-            .controlSize(.small)
+            .toggleStyle(.checkbox).controlSize(.mini)
+
+            // 套用列：有改動才出現
+            if monitor.dirty || monitor.saveMessage != nil {
+                HStack {
+                    if let m = monitor.saveMessage { Text(m).font(.caption2).foregroundStyle(m.hasPrefix("寫入失敗") ? .red : .secondary) }
+                    Spacer()
+                    Button("還原") { monitor.revert() }.disabled(!monitor.dirty)
+                    Button("套用") { monitor.apply() }.disabled(!monitor.dirty).keyboardShortcut(.defaultAction).buttonStyle(.borderedProminent)
+                }
+                .controlSize(.small)
+            }
         }
-        .padding(8)
+        .padding(10)
         .background(Color.secondary.opacity(0.06))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+
+    /// 三組預設：選中的填色，自訂時全部不亮並多一個「自訂」
+    var presetChips: some View {
+        HStack(spacing: 6) {
+            ForEach(Monitor.presets, id: \.0) { name, pts in
+                chip(name, selected: currentPresetName == name) { monitor.draft.curve = pts }
+            }
+            if currentPresetName == nil { chip("自訂", selected: true) {} }
+            Spacer()
+        }
+    }
+
+    func chip(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.caption.weight(selected ? .semibold : .regular))
+                .padding(.horizontal, 10).padding(.vertical, 4)
+                .background(selected ? Color.accentColor : Color.secondary.opacity(0.12))
+                .foregroundStyle(selected ? Color.white : Color.primary)
+                .clipShape(Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// 曲線預覽：X 溫度、Y 轉速；畫 draft 曲線、hot/critical 門檻、目前溫度與風扇位置
+    func curvePreview(_ s: Snapshot, fixed: Double?, fmin: Double, fmax: Double) -> some View {
+        let pts = monitor.draft.curve.sorted { $0.temp < $1.temp }
+        let tNow = min(max(s.controlTemp, 40), 108)
+        let rpmNow = s.fans.first?.rpm ?? fmin
+        return Chart {
+            RuleMark(x: .value("hot", monitor.config.hotTemp)).foregroundStyle(.orange.opacity(0.35)).lineStyle(.init(dash: [3]))
+            RuleMark(x: .value("crit", monitor.config.criticalTemp)).foregroundStyle(.red.opacity(0.35)).lineStyle(.init(dash: [3]))
+            if let fixed {
+                RuleMark(y: .value("rpm", fixed)).foregroundStyle(.teal)
+            } else {
+                // 曲線兩端延伸到圖的邊界
+                if let f = pts.first { LineMark(x: .value("t", 40), y: .value("rpm", f.rpm), series: .value("s", "c")).foregroundStyle(.teal) }
+                ForEach(Array(pts.enumerated()), id: \.offset) { _, p in
+                    LineMark(x: .value("t", p.temp), y: .value("rpm", p.rpm), series: .value("s", "c")).foregroundStyle(.teal)
+                    PointMark(x: .value("t", p.temp), y: .value("rpm", p.rpm)).foregroundStyle(.teal).symbolSize(20)
+                }
+                if let l = pts.last { LineMark(x: .value("t", 108), y: .value("rpm", l.rpm), series: .value("s", "c")).foregroundStyle(.teal) }
+                AreaMark(x: .value("t", 40), yStart: .value("a", fmin), yEnd: .value("rpm", pts.first?.rpm ?? fmin), series: .value("s", "a")).foregroundStyle(.teal.opacity(0.08))
+                ForEach(Array(pts.enumerated()), id: \.offset) { _, p in
+                    AreaMark(x: .value("t", p.temp), yStart: .value("a", fmin), yEnd: .value("rpm", p.rpm), series: .value("s", "a")).foregroundStyle(.teal.opacity(0.08))
+                }
+                AreaMark(x: .value("t", 108), yStart: .value("a", fmin), yEnd: .value("rpm", pts.last?.rpm ?? fmin), series: .value("s", "a")).foregroundStyle(.teal.opacity(0.08))
+            }
+            // 目前位置
+            RuleMark(x: .value("now", tNow)).foregroundStyle(s.level.color.opacity(0.5)).lineStyle(.init(lineWidth: 1))
+            PointMark(x: .value("now", tNow), y: .value("rpm", rpmNow)).foregroundStyle(s.level.color).symbolSize(45)
+                .annotation(position: tNow > 85 ? .leading : .trailing, alignment: .center, spacing: 4) {
+                    Text(String(format: "%.0f° · %.0f rpm", s.controlTemp, rpmNow)).font(.system(size: 9, design: .monospaced)).foregroundStyle(s.level.color)
+                }
+        }
+        .chartXScale(domain: 40...108)
+        .chartYScale(domain: fmin...fmax)
+        .chartXAxis { AxisMarks(values: [50, 60, 70, 80, 90, 100]) { v in AxisValueLabel { if let t = v.as(Int.self) { Text("\(t)°").font(.system(size: 9)) } } } }
+        .chartYAxis { AxisMarks(values: [1000, 2000, 3000, 4000]) { v in AxisGridLine().foregroundStyle(.secondary.opacity(0.15)); AxisValueLabel { if let r = v.as(Int.self) { Text("\(r / 1000)k").font(.system(size: 9)) } } } }
+        .frame(height: 96)
     }
 
     var footer: some View {
         HStack {
-            Button("重新整理") { monitor.tick() }
             Button("看 log") { NSWorkspace.shared.open(URL(fileURLWithPath: "/var/log/cool91.log")) }
+            Text("·").foregroundStyle(.quaternary)
+            Button("設定檔") { NSWorkspace.shared.selectFile(monitor.config.loadedFrom ?? "/etc/cool91/config.json", inFileViewerRootedAtPath: "") }
             Spacer()
+            Text("cool91 0.2").font(.caption2).foregroundStyle(.quaternary)
             Button("結束") { NSApp.terminate(nil) }
         }
         .font(.caption)

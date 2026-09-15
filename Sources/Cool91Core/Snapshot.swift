@@ -167,7 +167,7 @@ public struct Snapshot: Codable {
     public var short: String {
         let fan = fans.first.map { String(format: "%.0f", $0.rpm) } ?? "-"
         var s = String(format: "%@ %.0f°C 🌀%@rpm", level.emoji, controlTemp, fan)
-        if let p = pcoreMHz { s += String(format: " ⚡%.2fGHz", p / 1000) }
+        if let p = pcoreMHz, p >= 100 { s += String(format: " ⚡%.2fGHz", p / 1000) }
         if let t = thermalPressure, t != "Nominal" { s += " 降頻(\(t))" }
         return s
     }
@@ -180,7 +180,7 @@ public struct Snapshot: Codable {
         s += String(format: "GPU  最高 %.1f°C\n", gpuMax)
         if let ssd { s += String(format: "SSD  %.1f°C\n", ssd) }
         if let p = pcoreMHz {
-            s += String(format: "頻率 P-core %.2f GHz  E-core %.2f GHz  熱壓力 %@%@\n", p / 1000, (ecoreMHz ?? 0) / 1000, thermalPressure ?? "?", throttling ? "（降頻中）" : "")
+            s += String(format: "頻率 P-core %@  E-core %.2f GHz  熱壓力 %@%@\n", p >= 100 ? String(format: "%.2f GHz", p / 1000) : "閒置", (ecoreMHz ?? 0) / 1000, thermalPressure ?? "?", throttling ? "（降頻中）" : "")
         }
         if !sensorOK { s += "⚠️ 感測器讀取不完整\n" }
         for f in fans {
