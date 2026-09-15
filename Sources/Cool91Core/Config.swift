@@ -9,11 +9,11 @@ public struct Config: Codable {
         public init(temp: Double, rpm: Double) { self.temp = temp; self.rpm = rpm }
     }
     public var curve: [Point] = [
-        .init(temp: 55, rpm: 1000),
-        .init(temp: 65, rpm: 1800),
-        .init(temp: 75, rpm: 3000),
-        .init(temp: 85, rpm: 4200),
-        .init(temp: 90, rpm: 4900),
+        .init(temp: 60, rpm: 1000),
+        .init(temp: 75, rpm: 1800),
+        .init(temp: 85, rpm: 2600),
+        .init(temp: 92, rpm: 3600),
+        .init(temp: 97, rpm: 4900),
     ]
     /// 控制模式：curve 依曲線、auto 交還 SMC、fixed 固定轉速
     public var mode: String = "curve"

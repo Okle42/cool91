@@ -107,9 +107,9 @@ final class Monitor {
     func revert() { draft = config; saveMessage = nil }
 
     static let presets: [(String, [Config.Point])] = [
-        ("安靜", [.init(temp: 60, rpm: 1000), .init(temp: 70, rpm: 1500), .init(temp: 80, rpm: 2500), .init(temp: 90, rpm: 3800), .init(temp: 95, rpm: 4900)]),
-        ("均衡", Config().curve),
-        ("強力", [.init(temp: 50, rpm: 1500), .init(temp: 60, rpm: 2500), .init(temp: 70, rpm: 3500), .init(temp: 80, rpm: 4500), .init(temp: 85, rpm: 4900)]),
+        ("安靜", [.init(temp: 65, rpm: 1000), .init(temp: 80, rpm: 1600), .init(temp: 90, rpm: 2400), .init(temp: 95, rpm: 3400), .init(temp: 99, rpm: 4900)]),
+        ("均衡", Config().curve),   // A/B 實測：重載 87°C / 3150 rpm，不降頻
+        ("強力", [.init(temp: 55, rpm: 1000), .init(temp: 65, rpm: 1800), .init(temp: 75, rpm: 3000), .init(temp: 85, rpm: 4200), .init(temp: 90, rpm: 4900)]),
     ]
 
     var menuTitle: String {
