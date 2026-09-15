@@ -22,8 +22,8 @@ func usage() -> Never {
       fan auto | fan <rpm> [--fan N]   手動設風扇（需 sudo）
       guard [--interval S] [--config PATH] [--dry-run]
                                    常駐控制迴圈，依曲線調風扇（需 sudo）
-      check [--json]               把關檢查：exit 0=ok/warm, 1=hot, 2=critical
-      wait [--below TEMP] [--timeout S]   等待控制溫度降到門檻以下
+      check [--json]               能不能開工：exit 0=可以, 1=降頻中該等, 2=該擋（和 hook 同一套判斷）
+      wait [--below TEMP] [--timeout S]   等到可開工（降頻結束）；--below 改為等控制溫度降到 TEMP 以下
       hook                         Claude Code PreToolUse hook 入口（讀 stdin，輸出決策 JSON）
       doctor                       檢查 guard / 快照 / hook / 設定檔 / 衝突程式是否都正常
 
@@ -91,19 +91,24 @@ do {
         try runGuard(config: config, dryRun: flag("--dry-run"), interval: Double(opt("--interval") ?? "") ?? config.interval)
 
     case "check":
+        // 和 hook 同一套判斷：0 = 可開工，1 = 降頻中/hot 該等，2 = Trapping/critical 該擋
         let s = Snapshot.takeFast(config: config)
         if flag("--json") { print(s.json) } else { print(s.short) }
-        switch s.level {
-        case .ok, .warm: exit(0)
-        case .hot: exit(1)
-        case .critical: exit(2)
-        }
+        let v = workVerdict(s, config: config)
+        exit(v.block ? 2 : v.wait ? 1 : 0)
 
     case "wait":
-        let below = Double(opt("--below") ?? "") ?? config.hotTemp
+        // 無參數：等到可開工（pressure 回 Nominal）；--below T：等控制溫度降到 T 以下
         let timeout = Double(opt("--timeout") ?? "") ?? config.hookWaitSeconds
-        let ok = waitUntilCool(below: below, timeout: timeout, config: config) { s in
-            stderr("\(s.short)  等待降到 \(Int(below))°C 以下…")
+        let ok: Bool
+        if let below = Double(opt("--below") ?? "") {
+            ok = waitUntilCool(below: below, timeout: timeout, config: config) { s in
+                stderr("\(s.short)  等待降到 \(Int(below))°C 以下…")
+            }
+        } else {
+            ok = waitUntilWorkable(timeout: timeout, config: config) { s in
+                stderr("\(s.short)  等待降頻結束…")
+            }
         }
         exit(ok ? 0 : 1)
 
@@ -133,6 +138,36 @@ func waitUntilCool(below: Double, timeout: Double, config: Config, progress: (Sn
         progress(s)
         Thread.sleep(forTimeInterval: 2)
     }
+}
+
+/// 每 2 秒取樣直到可開工或逾時
+func waitUntilWorkable(timeout: Double, config: Config, progress: (Snapshot) -> Void) -> Bool {
+    let deadline = Date().addingTimeInterval(timeout)
+    while true {
+        let s = Snapshot.takeFast(config: config)
+        if !workVerdict(s, config: config).wait { return true }
+        if Date() >= deadline { return false }
+        progress(s)
+        Thread.sleep(forTimeInterval: 2)
+    }
+}
+
+// MARK: - 把關判斷（hook / check / wait 共用）
+
+/// 能不能開工。依據：有 thermal pressure（guard 以 root 從 powermetrics 讀到）就看它 —— 溫度高但沒降頻是風扇的事，不該讓工作等；
+/// 拿不到才退回溫度門檻。critical 溫度不管 pressure 都算（安全底線）
+///   wait  = 現在不該開工（降頻中 / hot）
+///   block = 嚴重到該擋下（Trapping / critical）
+func workVerdict(_ s: Snapshot, config: Config) -> (wait: Bool, block: Bool) {
+    if s.level == .critical { return (true, config.hookBlockOnCritical) }
+    if let pr = s.thermalPressure {
+        switch pr {
+        case "Nominal": return (false, false)
+        case "Trapping", "Sleeping": return (true, config.hookBlockOnCritical)
+        default: return (true, false)   // Moderate / Heavy：等它回 Nominal
+        }
+    }
+    return (s.level >= .hot, false)
 }
 
 // MARK: - hook
@@ -195,19 +230,7 @@ func runHook(config: Config) {
 
     var s = Snapshot.takeFast(config: config)
     var waited = 0.0
-    // 判斷依據：有 thermal pressure（guard 以 root 從 powermetrics 讀到）就看它 —— 溫度高但沒降頻是風扇的事，不該讓工作等；
-    // 拿不到才退回溫度門檻。critical 溫度不管 pressure 都算（安全底線）
-    func verdict(_ s: Snapshot) -> (wait: Bool, block: Bool) {
-        if s.level == .critical { return (true, config.hookBlockOnCritical) }
-        if let pr = s.thermalPressure {
-            switch pr {
-            case "Nominal": return (false, false)
-            case "Trapping", "Sleeping": return (true, config.hookBlockOnCritical)
-            default: return (true, false)   // Moderate / Heavy：等它回 Nominal
-            }
-        }
-        return (s.level >= .hot, false)
-    }
+    func verdict(_ s: Snapshot) -> (wait: Bool, block: Bool) { workVerdict(s, config: config) }
     var v = verdict(s)
     if v.wait && !allowed {
         let start = Date()

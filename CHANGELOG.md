@@ -1,0 +1,29 @@
+# Changelog
+
+## 0.2 — 2026-09-16
+
+**把關原則改變：讓機器全力開工，風扇負責避免降頻，只有真的降頻才讓工作等。**
+
+- guard 常駐 `powermetrics` 子行程（root）讀 P/E-core 硬體頻率與 thermal pressure，寫進快照與歷史
+- hook / `check` / `wait` 改看 thermal pressure：Nominal 放行（不看溫度）、Moderate/Heavy 等、Trapping 擋；critical 溫度為安全底線；拿不到 pressure 才退回溫度門檻（hot 90 → 95）
+- 預設曲線改為 A/B 實測的中間路線 `60→1000 75→1800 85→2600 92→3600 97→4900`（重載 87°C / 3150 rpm，不降頻；舊曲線保留為面板「強力」）
+- 控制溫度 = max(CPU, GPU)，可用 `includeGPU` 關
+- 溫度 EMA 升 0.7 / 降 0.2，每輪最多降 300 rpm；設定重載也不跳過斜率限制
+- 重指令預熱：hook 看到 `swift build` / `blender` / `ffmpeg`… 開頭就發事件，guard 拉到 3000 rpm 撐 2 分鐘
+- hook 白名單：`cool91` / `kill` / `pkill`… 任何等級放行
+- 容錯：設定檔解析失敗保留舊設定；感測器讀不完整不動風扇，連續 30 秒交還自動
+- 今日統計：降頻 / warm / hot / critical 秒數、最高溫、hook 等待與擋下、預熱、感測器故障；跨日結算寫 log
+- `cool91 doctor`
+- log 帶時間戳、只記變化；newsyslog 輪替
+- 面板：閒置只讀快照（1.5% / 80 MB → 0.2% / 33 MB）；P-core 格、頻率圖、降頻標籤、統計列、GPU 開關、目標虛線
+- 元件間通訊統一走檔案：`/tmp/cool91.json`、`/tmp/cool91.history.json`、`/tmp/cool91.events/`
+- 安裝：binary 寫暫存檔再 mv（避免 `OS_REASON_CODESIGNING`）；bootout 後等 launchd 清完再 bootstrap
+- `docs/ab-test-2026-09-16/`：A/B 原始資料與外部參考
+
+## 0.1 — 2026-09-16
+
+- SMC 讀寫（80 行 C + Swift 解碼）、感測器動態掃描
+- guard LaunchDaemon：風扇曲線 / 固定 / 自動，EMA + deadband，config 熱重載，退出交還自動
+- Claude Code PreToolUse hook：hot 等降溫、critical 擋下
+- 選單列面板、statusline 片段
+- `install.sh` 走系統密碼視窗（無 TTY 也能裝）
