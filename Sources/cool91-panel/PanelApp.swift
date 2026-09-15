@@ -147,7 +147,10 @@ enum Neon {
     static let violet = Color(red: 0.50, green: 0.25, blue: 0.95)
     static let amber  = Color(red: 1.00, green: 0.72, blue: 0.30)
     static let red    = Color(red: 1.00, green: 0.36, blue: 0.42)
-    static let plotBG = Color(red: 0.04, green: 0.05, blue: 0.09)
+    /// 面板整體深色玻璃底；plot 只比它再深一點點，不要浮出來
+    static let panelBG = Color(red: 0.06, green: 0.07, blue: 0.11).opacity(0.94)
+    static let plotBG  = Color.black.opacity(0.28)
+    static let cardBG  = Color.white.opacity(0.045)
 
     /// 線下漸層：上濃下淡到透明
     static func fade(_ c: Color, top: Double = 0.45) -> LinearGradient {
@@ -223,6 +226,8 @@ struct PanelView: View {
         }
         .padding(14)
         .frame(width: 320)
+        .background(Neon.panelBG)
+        .preferredColorScheme(.dark)
         .onAppear { monitor.tick() }
     }
 
@@ -249,7 +254,7 @@ struct PanelView: View {
             Text(s.guardRunning ? "guard 執行中" : "guard 未執行")
                 .font(.caption)
                 .padding(.horizontal, 8).padding(.vertical, 3)
-                .background(Color.secondary.opacity(0.15))
+                .background(Color.white.opacity(0.08))
                 .clipShape(Capsule())
         }
     }
@@ -278,7 +283,7 @@ struct PanelView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(6)
-        .background(Color.secondary.opacity(0.08))
+        .background(Neon.cardBG)
         .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 
@@ -496,7 +501,7 @@ struct PanelView: View {
             }
         }
         .padding(10)
-        .background(Color.secondary.opacity(0.06))
+        .background(Neon.cardBG)
         .clipShape(RoundedRectangle(cornerRadius: 10))
     }
 
