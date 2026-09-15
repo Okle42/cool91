@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/local/bin/cool91 hook",
+            "timeout": 150
+          }
+        ]
+      }
+    ]
+  }
+}

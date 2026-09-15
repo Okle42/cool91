@@ -1,0 +1,19 @@
+{
+  "curve": [
+    { "temp": 55, "rpm": 1000 },
+    { "temp": 65, "rpm": 1800 },
+    { "temp": 75, "rpm": 3000 },
+    { "temp": 85, "rpm": 4200 },
+    { "temp": 90, "rpm": 4900 }
+  ],
+  "interval": 5,
+  "deadband": 100,
+  "smoothing": 0.5,
+  "warmTemp": 80,
+  "hotTemp": 90,
+  "criticalTemp": 100,
+  "hookWaitSeconds": 90,
+  "hookBlockOnCritical": true,
+  "cpuPrefixes": ["Tp", "Te"],
+  "gpuPrefixes": ["Tg"]
+}
