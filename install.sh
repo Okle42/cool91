@@ -1,7 +1,9 @@
 #!/bin/bash
 # 一鍵安裝：release 建置 → CLI → 設定檔 → guard LaunchDaemon(root) → Claude Code hook → 選單列面板
+# root 步驟走 macOS 系統密碼視窗，所以在沒有 TTY 的環境（Claude Code 的 ! 指令）也能跑
 set -euo pipefail
 cd "$(dirname "$0")"
+SRC="$(pwd)"
 
 echo "▶ swift build -c release"
 swift build -c release 2>&1 | tail -1
@@ -11,18 +13,14 @@ if pgrep -f "Macs Fan Control.app/Contents/MacOS" >/dev/null; then
   exit 1
 fi
 
-echo "▶ 安裝 CLI 與設定（需 sudo）"
-sudo mkdir -p /usr/local/bin /etc/cool91
-sudo cp .build/release/cool91 /usr/local/bin/cool91
-[ -f /etc/cool91/config.json ] || sudo cp config.example.json /etc/cool91/config.json
-# 設定檔交給目前使用者可寫，面板才能改模式/曲線；guard 偵測到修改會自動重載
-sudo chown "$(id -un)" /etc/cool91/config.json
-
-echo "▶ 安裝 guard LaunchDaemon"
-sudo cp launchd/com.cool91.guard.plist /Library/LaunchDaemons/
-sudo chown root:wheel /Library/LaunchDaemons/com.cool91.guard.plist
-sudo launchctl bootout system/com.cool91.guard 2>/dev/null || true
-sudo launchctl bootstrap system /Library/LaunchDaemons/com.cool91.guard.plist
+echo "▶ 安裝 CLI、設定檔、guard LaunchDaemon（會跳出系統密碼視窗）"
+if [ "$(id -u)" = "0" ]; then
+  ./install-root.sh "$SRC" "${SUDO_USER:-$(id -un)}"
+elif sudo -n true 2>/dev/null; then
+  sudo ./install-root.sh "$SRC" "$(id -un)"
+else
+  osascript -e "do shell script \"'$SRC/install-root.sh' '$SRC' '$(id -un)'\" with administrator privileges with prompt \"cool91 需要管理員權限安裝風扇控制 daemon\""
+fi
 sleep 3
 /usr/local/bin/cool91 status
 
