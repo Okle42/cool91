@@ -114,7 +114,7 @@ sudo cool91 fan 3000     # 手動設轉速；sudo cool91 fan auto 交還
 tail -f /var/log/cool91.log
 ```
 
-**面板**：選單列右上角，漸層微光風格（深色底、霓虹發光線、線下漸層）。四格 CPU / GPU / SSD / P-core（降頻時 P-core 整格變紅），風扇條，溫度 / 風扇 / 頻率三張 5 分鐘曲線圖，今日統計列，曲線預覽圖（標出目前溫度與風扇位置），模式「曲線 / 固定 / 自動」，內建「安靜 / 均衡 / 強力」三組曲線，也可逐點自訂，按「套用」即生效。
+**面板**：選單列右上角，漸層微光風格（深色底、霓虹發光線、線下漸層）。頂端一句結論（全速運作 / 降頻中 / 溫度危險），溫度 / 風扇 / P-core 頻率三張卡各帶目前值與 5 分鐘曲線，今日統計列，曲線預覽圖（標出目前溫度與風扇位置），模式「曲線 / 固定 / 自動」，內建「安靜 / 均衡 / 強力」三組曲線，也可逐點自訂，按「套用」即生效。
 
 **設定檔** `/etc/cool91/config.json`（範例見 `config.example.json`）：曲線、門檻、平滑係數、降速斜率、GPU 是否納入、白名單、預熱關鍵字、感測器前綴都在這。改了不用重啟，解析失敗會保留上一份。
 
@@ -200,7 +200,10 @@ Claude Code hook 預設 60 秒逾時，而等待上限是 90 秒 —— hook 設
 **13. 就地覆寫 binary 會被 kernel 殺掉**
 `cp` 新版到 `/usr/local/bin/cool91` 之後，所有新啟動的 process 都以 `OS_REASON_CODESIGNING` 被殺 —— 舊 inode 的簽章快取還在。要 `cp` 到 `.new` 再 `mv` 換 inode。另外 `launchctl bootout` 後要等 launchd 真的清完再 `bootstrap`，否則回 `error 5`。
 
-**14. main.swift 頂層變數的初始化順序**
+**14. 別的工具顯示的「CPU 溫度」比 cool91 低 15–20°C**
+驗證數值時用 IOHID（`IOHIDEventSystemClient`，macmon / asitop 走的路）交叉比對，讀到 `PMU tdie` 最高 62°C，cool91 同時刻 78°C。查清楚後：**PMU = Power Management Unit，電源管理晶片**，是主機板上另一顆 IC（M 系列有兩顆，`PMU` / `PMU2`），負責把電源轉成 SoC 各區域的電壓。`PMU tdie` 是它自己的 die 溫度、`tdev` 是它量的周邊、`tcal` 是校正參考。它供電給 CPU，所以趨勢跟著 CPU 走，但物理上離核心熱點有一段距離，絕對值天生低 15–20°C。IOHID 不需要 root 也不用碰 SMC 私有結構，圖方便的工具就拿它當 CPU 溫度 —— 趨勢對、數值不對。cool91 讀的 `Tp*` 是 M4 SoC 內每顆 P-core 旁的感測器，也是 Apple 自己的聚合 key `TCMz`（SoC 最高溫）的來源；實測 `TCMz` 與 cool91 的 `cpuMax` 完全相等。熱管理與降頻看的是這個，風扇要管的也是這個。
+
+**15. main.swift 頂層變數的初始化順序**
 `main.swift` 的頂層 `let` 是依序執行的，`runGuard` 在 `switch` 裡被呼叫時，寫在後面的 `DateFormatter` 還沒建好，時間戳輸出空字串。放進 `enum` 用 `static let`（lazy）就好。
 
 ## 移植新晶片（M5 / M6 …）

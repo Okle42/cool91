@@ -209,14 +209,13 @@ struct PanelView: View {
     var monitor: Monitor
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 10) {
             if let s = monitor.snapshot {
                 header(s)
-                tiles(s)
-                fanRow(s)
-                tempChart
-                fanChart
-                if s.pcoreMHz != nil { freqChart }
+                tempCard(s)
+                fanCard(s)
+                if s.pcoreMHz != nil { freqCard(s) }
+                timeAxis
                 statsRow(s)
                 controls(s)
                 footer
@@ -231,98 +230,81 @@ struct PanelView: View {
         .onAppear { monitor.tick() }
     }
 
+    /// 標題列：名稱 + 狀態 chip，下面一行「結論」——現在能不能全力開工
     func header(_ s: Snapshot) -> some View {
-        HStack {
-            Text("cool91").font(.headline)
-            Spacer()
-            Text(s.level.label)
-                .font(.caption.bold())
-                .padding(.horizontal, 8).padding(.vertical, 3)
-                .background(s.level.color.opacity(0.25))
-                .foregroundStyle(s.level.color)
-                .clipShape(Capsule())
-            if s.throttling {
-                Text("降頻中").font(.caption.bold())
-                    .padding(.horizontal, 8).padding(.vertical, 3)
-                    .background(Color.red.opacity(0.25)).foregroundStyle(.red).clipShape(Capsule())
-            }
-            if let b = s.boostUntil, b > Date() {
-                Text("預熱 \(Int(b.timeIntervalSinceNow))s").font(.caption)
-                    .padding(.horizontal, 8).padding(.vertical, 3)
-                    .background(Color.teal.opacity(0.2)).clipShape(Capsule())
-            }
-            Text(s.guardRunning ? "guard 執行中" : "guard 未執行")
-                .font(.caption)
-                .padding(.horizontal, 8).padding(.vertical, 3)
-                .background(Color.white.opacity(0.08))
-                .clipShape(Capsule())
-        }
-    }
-
-    func tiles(_ s: Snapshot) -> some View {
-        HStack(spacing: 6) {
-            tile("CPU", String(format: "%.0f°", s.cpuMax), sub: String(format: "avg %.0f°", s.cpuAvg), color: Neon.cyan)
-            tile("GPU", String(format: "%.0f°", s.gpuMax), sub: "最高", color: Neon.green)
-            tile("SSD", String(format: "%.0f°", s.ssd ?? 0), sub: "", color: Color.white.opacity(0.75))
-            if let p = s.pcoreMHz {
-                // P-core 硬體頻率：M4 滿載正常 3.9–4.4，掉到 3.8 以下且 pressure 非 Nominal = 熱降頻；cluster 閒置時韌體回 0
-                let idle = p < 100
-                tile("P-core", idle ? "閒置" : String(format: "%.2f", p / 1000),
-                     sub: s.throttling ? "降頻 " + (s.thermalPressure ?? "") : idle ? "GHz" : String(format: "GHz · E %.1f", (s.ecoreMHz ?? 0) / 1000),
-                     color: s.throttling ? Neon.red : idle ? .secondary : Neon.purple)
-            }
-        }
-    }
-
-    func tile(_ name: String, _ v: String, sub: String, color: Color) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(name).font(.caption).foregroundStyle(.secondary)
-            Text(v).font(.system(size: 20, weight: .semibold, design: .rounded)).foregroundStyle(color).lineLimit(1).minimumScaleFactor(0.7)
-                .shadow(color: color.opacity(0.55), radius: 6)
-            Text(sub).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(6)
-        .background(Neon.cardBG)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-    }
-
-    func fanRow(_ s: Snapshot) -> some View {
-        ForEach(s.fans, id: \.index) { f in
-            VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    Image(systemName: "fan.fill").foregroundStyle(Neon.cyan)
-                    Text(String(format: "%.0f rpm", f.rpm)).font(.system(.title3, design: .rounded).weight(.semibold))
-                    Spacer()
-                    Text(f.manual ? String(format: "目標 %.0f · 手動", f.target) : "自動")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                GeometryReader { g in
-                    let frac = min(1, max(0, (f.rpm - f.min) / max(1, f.max - f.min)))
-                    ZStack(alignment: .leading) {
-                        Capsule().fill(Color.white.opacity(0.07))
-                        Capsule().fill(Neon.sweep(Neon.cyan, Neon.violet))
-                            .frame(width: max(6, g.size.width * frac))
-                            .shadow(color: Neon.cyan.opacity(0.6), radius: 5)
-                    }
-                }
-                .frame(height: 6)
-                HStack {
-                    Text(String(format: "%.0f", f.min)).font(.caption2).foregroundStyle(.secondary)
-                    Spacer()
-                    Text(String(format: "%.0f", f.max)).font(.caption2).foregroundStyle(.secondary)
-                }
-            }
-        }
-    }
-
-    var tempChart: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 8) {
-                Text("溫度（5 分鐘）").font(.caption).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Text("cool91").font(.headline)
                 Spacer()
-                legend("CPU", Neon.cyan); legend("GPU", Neon.green)
+                if let b = s.boostUntil, b > Date() {
+                    chipLabel("預熱 \(Int(b.timeIntervalSinceNow))s", Neon.cyan)
+                }
+                chipLabel(s.guardRunning ? "guard 執行中" : "guard 未執行", s.guardRunning ? Color.white.opacity(0.6) : Neon.amber)
             }
+            statusLine(s)
+        }
+    }
+
+    func chipLabel(_ text: String, _ color: Color) -> some View {
+        Text(text).font(.caption2.weight(.medium))
+            .padding(.horizontal, 8).padding(.vertical, 3)
+            .foregroundStyle(color)
+            .background(color.opacity(0.14)).clipShape(Capsule())
+    }
+
+    /// 一句話結論：全速 / 降頻中 / 溫度危險 / 沒有頻率資料
+    func statusLine(_ s: Snapshot) -> some View {
+        let (icon, text, color): (String, String, Color) = {
+            if !s.guardRunning { return ("exclamationmark.triangle.fill", "guard 沒在跑，風扇由 macOS 控制", Neon.amber) }
+            if s.level == .critical { return ("flame.fill", String(format: "溫度 %.0f°C 已達 critical，hook 會擋下工作", s.controlTemp), Neon.red) }
+            if s.throttling { return ("tortoise.fill", "降頻中（\(s.thermalPressure ?? "")）· hook 會讓工作等", Neon.red) }
+            if s.pcoreMHz == nil { return ("questionmark.circle", "沒有頻率資料，改用溫度判斷（\(s.level.label)）", Neon.amber) }
+            if (s.pcoreMHz ?? 0) < 100 { return ("moon.zzz.fill", "閒置 · 未降頻", Neon.green) }
+            return ("bolt.fill", String(format: "全速運作 %.2f GHz · 未降頻", (s.pcoreMHz ?? 0) / 1000), Neon.green)
+        }()
+        return HStack(spacing: 6) {
+            Image(systemName: icon).font(.caption).foregroundStyle(color).shadow(color: color.opacity(0.8), radius: 4)
+            Text(text).font(.caption.weight(.medium)).foregroundStyle(color)
+            Spacer()
+            if let st = s.stats, st.throttleSeconds > 0 {
+                Text("今日降頻 \(Format.hms(st.throttleSeconds))").font(.caption2).foregroundStyle(Neon.red)
+            }
+        }
+    }
+
+    // MARK: 三張卡：標題 + 目前值 + 5 分鐘曲線
+
+    var window: ClosedRange<Date> { Date().addingTimeInterval(-History.keep)...Date() }
+
+    func card<Chart: View>(title: String, @ViewBuilder value: () -> some View, @ViewBuilder chart: () -> Chart) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .lastTextBaseline) {
+                Text(title).font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                value()
+            }
+            chart()
+        }
+        .padding(8)
+        .background(Neon.cardBG)
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+
+    func bigValue(_ v: String, _ color: Color, unit: String = "") -> some View {
+        HStack(alignment: .lastTextBaseline, spacing: 2) {
+            Text(v).font(.system(size: 18, weight: .semibold, design: .rounded)).foregroundStyle(color).shadow(color: color.opacity(0.5), radius: 5)
+            if !unit.isEmpty { Text(unit).font(.caption2).foregroundStyle(.secondary) }
+        }
+    }
+
+    func tempCard(_ s: Snapshot) -> some View {
+        card(title: "溫度") {
+            HStack(spacing: 10) {
+                HStack(spacing: 4) { legend("CPU", Neon.cyan); bigValue(String(format: "%.0f°", s.cpuMax), Neon.cyan) }
+                HStack(spacing: 4) { legend("GPU", Neon.green); bigValue(String(format: "%.0f°", s.gpuMax), Neon.green) }
+                if let ssd = s.ssd { Text(String(format: "SSD %.0f°", ssd)).font(.caption2).foregroundStyle(.secondary) }
+            }
+        } chart: {
             Chart {
                 RuleMark(y: .value("hot", monitor.config.hotTemp)).foregroundStyle(Neon.amber.opacity(0.35)).lineStyle(.init(dash: [3]))
                 RuleMark(y: .value("crit", monitor.config.criticalTemp)).foregroundStyle(Neon.red.opacity(0.35)).lineStyle(.init(dash: [3]))
@@ -336,20 +318,27 @@ struct PanelView: View {
                 ForEach(monitor.history, id: \.time) { p in
                     glowLine(x: .value("t", p.time), y: .value("cpu", p.cpu), series: "cpu", color: Neon.cyan)
                 }
+                if let last = monitor.history.last {
+                    glowPoint(x: .value("t", last.time), y: .value("cpu", last.cpu), color: Neon.cyan, size: 14)
+                    glowPoint(x: .value("t", last.time), y: .value("gpu", last.gpu), color: Neon.green, size: 14)
+                }
             }
+            .chartXScale(domain: window)
             .chartYScale(domain: 30...110)
             .neonPlot()
             .frame(height: 84)
         }
     }
 
-    var fanChart: some View {
-        VStack(alignment: .leading, spacing: 2) {
+    func fanCard(_ s: Snapshot) -> some View {
+        let f = s.fans.first
+        return card(title: "風扇") {
             HStack(spacing: 8) {
-                Text("風扇轉速").font(.caption).foregroundStyle(.secondary)
-                Spacer()
-                legend("實際", Neon.purple); legend("目標", Color.white.opacity(0.5), dashed: true)
+                if let f, f.manual { Text(String(format: "目標 %.0f", f.target)).font(.caption2).foregroundStyle(.secondary) }
+                else { Text("macOS 自動").font(.caption2).foregroundStyle(.secondary) }
+                bigValue(String(format: "%.0f", f?.rpm ?? 0), Neon.purple, unit: "rpm")
             }
+        } chart: {
             Chart {
                 ForEach(monitor.history, id: \.time) { p in
                     AreaMark(x: .value("t", p.time), y: .value("rpm", p.rpm), series: .value("s", "rpm•a"))
@@ -362,16 +351,33 @@ struct PanelView: View {
                 ForEach(monitor.history, id: \.time) { p in
                     glowLine(x: .value("t", p.time), y: .value("rpm", p.rpm), series: "rpm", color: Neon.purple)
                 }
+                if let last = monitor.history.last {
+                    glowPoint(x: .value("t", last.time), y: .value("rpm", last.rpm), color: Neon.purple, size: 14)
+                }
             }
-            .chartYScale(domain: 0...(monitor.snapshot?.fans.first?.max ?? 5000))
-            .neonPlot()
+            .chartXScale(domain: window)
+            .chartYScale(domain: 0...(f?.max ?? 5000))
+            .chartYAxis { AxisMarks(position: .trailing, values: [1000, 2000, 3000, 4000]) { v in
+                AxisGridLine().foregroundStyle(Color.white.opacity(0.06))
+                AxisValueLabel { if let r = v.as(Int.self) { Text("\(r / 1000)k").font(.system(size: 9)).foregroundStyle(Color.white.opacity(0.45)) } }
+            } }
+            .chartXAxis(.hidden)
+            .chartPlotStyle { $0.background(Neon.plotBG).clipShape(RoundedRectangle(cornerRadius: 6)) }
             .frame(height: 56)
         }
     }
 
-    var freqChart: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text("P-core 頻率（GHz）").font(.caption).foregroundStyle(.secondary)
+    func freqCard(_ s: Snapshot) -> some View {
+        let p = s.pcoreMHz ?? 0
+        let idle = p < 100
+        return card(title: "P-core 頻率") {
+            HStack(spacing: 8) {
+                if s.throttling { chipLabel("降頻 \(s.thermalPressure ?? "")", Neon.red) }
+                else if !idle, let e = s.ecoreMHz { Text(String(format: "E %.1f", e / 1000)).font(.caption2).foregroundStyle(.secondary) }
+                if idle { bigValue("閒置", .secondary) }
+                else { bigValue(String(format: "%.2f", p / 1000), s.throttling ? Neon.red : Neon.green, unit: "GHz") }
+            }
+        } chart: {
             Chart {
                 ForEach(monitor.history.filter { ($0.pMHz ?? 0) >= 100 }, id: \.time) { p in   // 閒置（0）不畫，留缺口
                     AreaMark(x: .value("t", p.time), yStart: .value("b", 0.9), yEnd: .value("GHz", (p.pMHz ?? 0) / 1000), series: .value("s", "p•a"))
@@ -380,11 +386,26 @@ struct PanelView: View {
                 ForEach(monitor.history.filter { ($0.pMHz ?? 0) >= 100 }, id: \.time) { p in
                     glowLine(x: .value("t", p.time), y: .value("GHz", (p.pMHz ?? 0) / 1000), series: "p", color: Neon.green)
                 }
+                if let last = monitor.history.last, (last.pMHz ?? 0) >= 100 {
+                    glowPoint(x: .value("t", last.time), y: .value("GHz", (last.pMHz ?? 0) / 1000), color: Neon.green, size: 14)
+                }
             }
+            .chartXScale(domain: window)
             .chartYScale(domain: 0.9...4.5)
             .neonPlot()
             .frame(height: 56)
         }
+    }
+
+    /// 三張卡共用的時間軸
+    var timeAxis: some View {
+        HStack {
+            Text("5 分鐘前").font(.system(size: 9)).foregroundStyle(.quaternary)
+            Spacer()
+            Text("現在").font(.system(size: 9)).foregroundStyle(.quaternary)
+        }
+        .padding(.horizontal, 8)
+        .padding(.top, -6)
     }
 
     func legend(_ name: String, _ color: Color, dashed: Bool = false) -> some View {
@@ -402,20 +423,24 @@ struct PanelView: View {
     func statsRow(_ s: Snapshot) -> some View {
         if let st = s.stats {
             HStack(spacing: 10) {
-                stat("今日最高", String(format: "%.0f°", st.maxTemp), color: monitor.config.level(for: st.maxTemp).color)
-                stat("hot", Format.hms(st.hotSeconds), color: st.hotSeconds > 0 ? .orange : .secondary)
-                stat("critical", Format.hms(st.criticalSeconds), color: st.criticalSeconds > 0 ? .red : .secondary)
-                stat("降頻", Format.hms(st.throttleSeconds), color: st.throttleSeconds > 0 ? .red : .secondary)
+                stat("今日最高", String(format: "%.0f°", st.maxTemp), color: monitor.config.level(for: st.maxTemp).neon)
+                stat("hot", Format.hms(st.hotSeconds), color: st.hotSeconds > 0 ? Neon.amber : .secondary)
+                stat("critical", Format.hms(st.criticalSeconds), color: st.criticalSeconds > 0 ? Neon.red : .secondary)
+                stat("降頻", Format.hms(st.throttleSeconds), color: st.throttleSeconds > 0 ? Neon.red : .secondary)
                 stat("hook 等/擋", "\(st.hookWaits)/\(st.hookDenies)", color: .secondary)
+                stat("預熱", "\(st.boosts)", color: .secondary)
             }
             .font(.caption2)
+            .padding(.vertical, 6).padding(.horizontal, 4)
+            .background(Neon.cardBG)
+            .clipShape(RoundedRectangle(cornerRadius: 10))
         }
     }
 
     func stat(_ name: String, _ v: String, color: Color) -> some View {
         VStack(spacing: 1) {
-            Text(v).font(.system(.caption, design: .rounded).weight(.semibold)).foregroundStyle(color)
-            Text(name).foregroundStyle(.secondary)
+            Text(v).font(.system(.caption, design: .rounded).weight(.semibold)).foregroundStyle(color).lineLimit(1).minimumScaleFactor(0.8)
+            Text(name).font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8)
         }
         .frame(maxWidth: .infinity)
     }

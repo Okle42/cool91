@@ -102,20 +102,20 @@ public struct Snapshot: Codable {
         }
         let cpu = cachedCPUKeys.compactMap(SMC.readDouble)
         let gpu = cachedGPUKeys.compactMap(SMC.readDouble)
-        let cpuMax = cpu.max() ?? 0
-        let gpuMax = gpu.max() ?? 0
+        // 若 guard 有在跑，補上它的資訊；感測器偶爾讀空時也拿上一筆頂著，不要畫出掉到 0 的尖刺
+        let saved = load()
+        let cpuMax = cpu.max() ?? saved?.cpuMax ?? 0
+        let gpuMax = gpu.max() ?? saved?.gpuMax ?? 0
         let control = config.includeGPU ? max(cpuMax, gpuMax) : cpuMax
         let fans = SMC.fans().map {
             FanState(index: $0.index, rpm: $0.actual, target: $0.target, min: $0.min, max: $0.max, manual: $0.manual)
         }
-        // 若 guard 有在跑，補上它的資訊
-        let saved = load()
         let alive = saved.map { Date().timeIntervalSince($0.time) < config.interval * 3 && $0.guardRunning } ?? false
         var snap = Snapshot(time: Date(),
                         cpuMax: cpuMax,
                         cpuAvg: cpu.isEmpty ? 0 : cpu.reduce(0, +) / Double(cpu.count),
                         gpuMax: gpuMax,
-                        ssd: SMC.readDouble("TH0x"),
+                        ssd: SMC.readDouble("TH0x") ?? saved?.ssd,
                         fans: fans,
                         level: config.level(for: control),
                         guardRunning: alive,
