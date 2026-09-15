@@ -157,10 +157,22 @@ func commandIsAllowed(_ command: String, allow: [String]) -> Bool {
     return true
 }
 
-/// 指令是否看起來是重工作（要預熱）
+/// 指令是否看起來是重工作（要預熱）。只看每段指令的開頭（去掉 sudo/env/VAR=x），
+/// 不掃整段文字——否則 heredoc 或字串裡提到 "swift build" 也會觸發
 func commandNeedsBoost(_ command: String, keywords: [String]) -> Bool {
-    let c = " " + command.lowercased()
-    return keywords.contains { c.contains($0.lowercased()) }
+    let segments = command
+        .replacingOccurrences(of: "&&", with: "\n")
+        .replacingOccurrences(of: "||", with: "\n")
+        .components(separatedBy: CharacterSet(charactersIn: ";|\n"))
+    for seg in segments {
+        var tokens = seg.trimmingCharacters(in: .whitespaces).split(separator: " ", omittingEmptySubsequences: true).map(String.init)
+        while let t = tokens.first, t == "sudo" || t == "env" || t == "exec" || t == "time" || t == "nice" || (t.contains("=") && !t.hasPrefix("-")) { tokens.removeFirst() }
+        guard !tokens.isEmpty else { continue }
+        tokens[0] = (tokens[0] as NSString).lastPathComponent
+        let head = tokens.prefix(3).joined(separator: " ").lowercased() + " "
+        if keywords.contains(where: { head.hasPrefix($0.lowercased()) }) { return true }
+    }
+    return false
 }
 
 /// Claude Code PreToolUse hook：
