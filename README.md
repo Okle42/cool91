@@ -29,6 +29,10 @@ Mac mini M4 的預設風扇策略極度保守 —— **CPU 已經 100°C，風�
 | | cool91 | Macs Fan Control |
 |---|---|---|
 | 自訂風扇曲線 | ✅ 曲線 / 固定 / 自動，面板可即時改 | ✅ |
+| CPU + GPU 一起看 | ✅ 取兩者最高值決定風扇與把關 | ✅ |
+| 風扇不忽高忽低 | ✅ 升溫快反應、降溫慢放，每 5 秒最多降 300 rpm | 部分 |
+| **重指令預熱** | ✅ Claude 要跑 `swift build`/`blender`/`ffmpeg`… 前先把風扇拉起來 | ❌ |
+| 每日統計 | ✅ hot / critical 秒數、hook 等待與擋下次數、最高溫 | ❌ |
 | 選單列顯示溫度 | ✅ `🟡 82°`，點開有 5 分鐘曲線圖 | ✅ |
 | CLI / 腳本可查詢 | ✅ `cool91 check` 回 exit code 0/1/2 | ❌ |
 | **AI agent 把關** | ✅ Claude Code PreToolUse hook：hot 等降溫、critical 擋下 | ❌ |
@@ -50,28 +54,33 @@ Sources/CSMC          80 行 C：open / read / write / 列舉 key
 Sources/Cool91Core    Swift library：型別解碼、感測器掃描、風扇曲線、設定檔、快照
    │
    ├─► cool91 (CLI)
-   │     ├─ guard   root LaunchDaemon，每 5 秒依曲線寫 F0Tg/F0Md，快照寫到 /tmp/cool91.json
-   │     ├─ hook    Claude Code PreToolUse(Bash) 入口 —— 只讀快照檔，≈0 成本
-   │     └─ status / check / wait / fan / sensors / chip
+   │     ├─ guard   root LaunchDaemon，每 5 秒依曲線寫 F0Tg/F0Md
+   │     │          寫 /tmp/cool91.json（快照＋今日統計）、/tmp/cool91.history.json（5 分鐘曲線）
+   │     │          收 /tmp/cool91.events/ 裡的事件（預熱、hook 統計），log 到 /var/log/cool91.log
+   │     ├─ hook    Claude Code PreToolUse(Bash) 入口 —— 只讀快照檔，≈0 成本；重指令丟預熱事件
+   │     └─ status / check / wait / fan / sensors / chip / doctor
    │
    └─► cool91-panel   選單列 .app（使用者層級，不需 root）
-                      讀快照畫圖；改模式/曲線 → 寫 config → guard 偵測 mtime 熱重載
+                      閒置只讀快照更新標題；打開才讀歷史檔畫圖
+                      改模式/曲線 → 寫 config → guard 偵測 mtime 熱重載
 ```
 
-**權限切分是整個設計的核心**：只有 guard 需要 root（寫 SMC），其他所有東西 —— 面板、hook、statusline —— 都只讀一個 644 的 JSON 快照。面板想改風扇，不是自己寫 SMC，而是改設定檔讓 guard 去做。
+**權限切分是整個設計的核心**：只有 guard 需要 root（寫 SMC），其他所有東西 —— 面板、hook、statusline —— 都只讀 644 的 JSON 檔。非 root 元件要「告訴」guard 什麼事（面板改曲線、hook 要預熱）一律走檔案：改設定檔，或丟一個小 JSON 到 `/tmp/cool91.events/`（1777 目錄），guard 每輪讀完就刪。
 
 ## 把關邏輯（Claude Code hook）
 
-以 CPU 最高溫為準，每次 Claude 要執行 Bash 前：
+以控制溫度（CPU 與 GPU 最高值）為準，每次 Claude 要執行 Bash 前：
 
 | 等級 | 門檻 | hook 行為 |
 |---|---|---|
-| 🟢 ok | < 80°C | 放行 |
-| 🟡 warm | 80–90 | 放行 |
+| 🟢 ok | < 80°C | 放行；指令含 `swift build`/`xcodebuild`/`blender`/`ffmpeg`… 就先發預熱事件（3000 rpm 撐 2 分鐘） |
+| 🟡 warm | 80–90 | 同上 |
 | 🟠 hot | 90–100 | **先等降到 90 以下（最多 90 秒）再放行**，附警告訊息 |
 | 🔴 critical | ≥ 100 | **擋下（deny）並說明原因**；可在 config 關掉 |
 
-hook 只讀 `/tmp/cool91.json`，不開 SMC，所以每次 Bash 前多花的時間可以忽略。
+**白名單指令不受限**：`cool91`、`kill`、`pkill`、`killall`、`ps`、`top`、`sleep`… 在 critical 也放行，否則 Claude 連降溫的指令都跑不了。清單在 config `hookAllowCommands`。
+
+hook 只讀 `/tmp/cool91.json`，不開 SMC，所以每次 Bash 前多花的時間可以忽略（實測 9 ms）。
 
 ## 實測（Mac mini M4，macOS 26）
 
@@ -85,7 +94,7 @@ cool91 guard 啟動（Apple M4，1 顆風扇，每 5.0s，模式 curve，控制�
 🟡  82°C 🌀4618rpm                      ← 20 秒後，降 23°C
 ```
 
-資源：`guard` 常駐 **0.1% CPU、7.9 MB RSS**；`cool91 check` 單次 0.18 秒（含開 SMC）；走快照檔則 < 10 ms。
+資源：`guard` 常駐 **0.1% CPU、3.5 MB RSS**；面板閒置 **0.2% / 33 MB**（打開時 1–3%）；`cool91 check` 單次 0.18 秒（含開 SMC）；走快照檔則 < 10 ms。
 
 ## 克服的問題
 
@@ -102,7 +111,7 @@ M4 上有 **1375 個 key**。不寫死任何名稱：啟動時掃描所有 `T*` 
 Claude Code 的 `!` 指令跑 `sudo` 會直接失敗（`a terminal is required to read the password`）。root 步驟改用 `osascript … with administrator privileges`，跳系統密碼視窗，AI 自己就能完成安裝。
 
 **5. 風扇忽高忽低**
-單次取樣的 CPU 最高溫抖動很大（89 → 82 → 84）。加了溫度 EMA（α = 0.5）+ 100 rpm deadband，目標轉速差距不到 100 就不寫 SMC。
+單次取樣的 CPU 最高溫抖動很大（89 → 82 → 84）。第一版用對稱 EMA（α = 0.5）+ 100 rpm deadband，還是會 4900 → 4460 → 4700 → 4900 來回跳。現在升溫用 α = 0.7 快反應、降溫用 α = 0.2 慢慢放，再加每輪最多降 300 rpm 的斜率限制（升速不限）。從全速降到最低至少要 65 秒，風扇不會被反覆抽動。
 
 **6. 不能把風扇操爆**
 轉速上限不是寫死的常數，是直接讀韌體回報的 `F0Mx`（M4 mini = 4900）。任何模式的目標都被夾在 `F0Mn`–`F0Mx`，程式上寫不出更高的值；SMC 韌體本身還會再夾一次。guard 收到 SIGTERM/SIGINT/SIGHUP 一律先把風扇交還自動（`F0Md=0`）再退出；整支程式只寫 `F?Md`、`F?Tg` 兩個 key。
@@ -112,6 +121,18 @@ Claude Code hook 預設 60 秒逾時，而 hot 等待上限是 90 秒 —— hoo
 
 **8. 和 Macs Fan Control 互搶**
 兩個程式同時寫 `F0Tg` 會互相蓋掉。`install.sh` 偵測到 Macs Fan Control 還在跑（含關掉視窗後的選單列常駐）就拒絕安裝。
+
+**9. 設定檔寫到一半被 guard 讀到**
+`/etc/cool91` 目錄是 root 的，面板無法用原子寫入（要在同目錄建暫存檔），guard 每 5 秒就讀一次，有機會讀到半截 JSON。第一版解析失敗會退回預設值、而且之後永遠不再重載。現在解析失敗一律保留上一份設定並 log，下一輪再試。
+
+**10. 感測器讀失敗被當成「很冷」**
+第一版 `cpu.max() ?? 0`：SMC 讀取失敗會把溫度當 0，EMA 被拉低、風扇降速。現在讀到的 CPU 感測器少於一半就標記 `sensorOK = false`，這輪不動風扇；連續 30 秒故障就交還 SMC 自動。
+
+**11. 面板閒著也在畫圖**
+`MenuBarExtra(.window)` 的內容 view 不會 disappear，`onAppear` 判斷不了選單有沒有打開；`NSStatusBarWindow` 又永遠 `isVisible`。要看的是 `MenuBarExtraWindow` 的 `isVisible`。閒置時只讀快照更新標題，歷史曲線由 guard 寫檔、面板打開才讀，從 1.5% / 80 MB 降到 0.2% / 33 MB。
+
+**12. main.swift 頂層變數的初始化順序**
+`main.swift` 的頂層 `let` 是依序執行的，`runGuard` 在 `switch` 裡被呼叫時，寫在後面的 `DateFormatter` 還沒建好，時間戳輸出空字串。放進 `enum` 用 `static let`（lazy）就好。
 
 ## 安裝
 
@@ -128,8 +149,9 @@ cd cool91
 ## 使用
 
 ```bash
-cool91 status            # 溫度 / 風扇 / 等級 / guard 狀態
+cool91 status            # 溫度 / 風扇 / 等級 / guard 狀態 / 今日統計 / 預熱
 cool91 status --short    # 🟡 86°C 🌀3743rpm
+cool91 doctor            # 一次檢查 guard、快照、hook、設定檔、log 輪替、衝突程式
 cool91 check ; echo $?   # 0=ok/warm 1=hot 2=critical（給腳本判斷）
 cool91 wait --below 85   # 阻塞到 CPU 降到 85 以下
 cool91 sensors           # 列出所有溫度感測器（移植新晶片用）
@@ -139,7 +161,19 @@ tail -f /var/log/cool91.log
 
 面板：選單列右上角，模式「曲線 / 固定 / 自動」，內建「安靜 / 均衡 / 強力」三組曲線，也可逐點自訂，按「套用」即生效。
 
-設定檔 `/etc/cool91/config.json`（範例見 `config.example.json`）：曲線、門檻、等待秒數、感測器前綴都在這。
+設定檔 `/etc/cool91/config.json`（範例見 `config.example.json`）：曲線、門檻、平滑係數、降速斜率、GPU 是否納入、白名單、預熱關鍵字、感測器前綴都在這。改了不用重啟。
+
+log：`/var/log/cool91.log`，帶時間戳，只記「寫了 SMC」「等級變化」「設定重載」「預熱」「感測器異常」，不會每輪一行；超過 1 MB 由 newsyslog 輪替（`/etc/newsyslog.d/cool91.conf`）。
+
+## 這樣長期跑對機器好嗎？風扇會不會操壞？
+
+**溫度那邊：更好。** Apple 的預設策略是「安靜優先」，CPU 100°C 才把風扇拉到 1400 rpm，晶片長期泡在 95–105°C。Apple Silicon 在這個溫度會降頻，長期也加速老化（電遷移）。cool91 預設曲線讓重載時停在 75–85°C，代價是風扇多轉、多一點噪音和灰塵。SoC 焊在主機板上，風扇是幾百塊可換的零件 —— 這個取捨是划算的。
+
+**風扇那邊：兩個原則。** 一、轉速上限是韌體回報的 `F0Mx`（M4 mini = 4900），Apple 自己在 100°C+ 也會用到這個值，不是超規格。二、真正傷風扇的不是轉得快，是**頻繁啟停和劇烈變速**（軸承衝擊、馬達電流尖峰）。這正是不對稱 EMA + 降速斜率限制 + deadband 在防的：升溫時該快就快，降溫時每 5 秒最多降 300 rpm，從 4900 回到 1000 至少 65 秒。idle 時曲線最低點就是韌體最低轉速 1000，跟 Apple 自動一模一樣。
+
+**怎麼判斷曲線調得對不對：**看 `cool91 status` 的今日統計。目標是 critical = 0、hot 很少（每天幾分鐘內）、warm 出現在重載時是正常的。如果整天 warm 都很多、風扇長期 3000+ rpm，把曲線 75°C 那點降一點（例如 2400）換安靜；如果 hot 常出現，把 85°C 那點拉高。
+
+**最壞情況：**guard 掛了，launchd `KeepAlive` 幾秒內重啟；正常退出一定先交還自動；連 SMC 手動模式都沒接管時，SoC 自己還有硬體熱保護（降頻、最後關機），不會燒壞。每年清一次灰塵就好。
 
 ### 接到 Claude Code 狀態列（選用）
 

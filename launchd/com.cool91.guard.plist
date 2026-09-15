@@ -12,7 +12,7 @@
   <key>KeepAlive</key><true/>
   <key>ProcessType</key><string>Background</string>
   <key>Nice</key><integer>10</integer>
-  <key>StandardOutPath</key><string>/var/log/cool91.log</string>
-  <key>StandardErrorPath</key><string>/var/log/cool91.log</string>
+  <!-- 主 log 由 guard 自己 append 到 /var/log/cool91.log（帶時間戳、可被 newsyslog 輪替）；這裡只接崩潰訊息 -->
+  <key>StandardErrorPath</key><string>/var/log/cool91.err.log</string>
 </dict>
 </plist>

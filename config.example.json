@@ -1,4 +1,5 @@
 {
+  "mode": "curve",
   "curve": [
     { "temp": 55, "rpm": 1000 },
     { "temp": 65, "rpm": 1800 },
@@ -6,14 +7,22 @@
     { "temp": 85, "rpm": 4200 },
     { "temp": 90, "rpm": 4900 }
   ],
+  "fixedRPM": 3000,
   "interval": 5,
   "deadband": 100,
-  "smoothing": 0.5,
+  "smoothingUp": 0.7,
+  "smoothingDown": 0.2,
+  "maxRampDown": 300,
+  "includeGPU": true,
   "warmTemp": 80,
   "hotTemp": 90,
   "criticalTemp": 100,
   "hookWaitSeconds": 90,
   "hookBlockOnCritical": true,
+  "hookAllowCommands": ["cool91", "kill", "pkill", "killall", "pgrep", "ps", "top", "sleep", "cat", "tail", "echo", "launchctl"],
+  "boostCommands": ["swift build", "xcodebuild", "cmake", "ninja", "cargo build", "cargo test", "blender", "ffmpeg", "clang", "gcc", "rustc", "go build", "npm run build", "pytest", "make "],
+  "boostRPM": 3000,
+  "boostSeconds": 120,
   "cpuPrefixes": ["Tp", "Te"],
   "gpuPrefixes": ["Tg"]
 }

@@ -29,38 +29,66 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 @Observable
 final class Monitor {
-    struct Sample: Identifiable {
-        let id = UUID()
-        let time: Date
-        let cpu: Double
-        let gpu: Double
-        let rpm: Double
-    }
-
     var snapshot: Snapshot?
-    var history: [Sample] = []
+    var history: [HistoryPoint] = []
     var config = Config.load(path: nil)
     var draft = Config.load(path: nil)   // 面板上編輯中的設定
     var saveMessage: String? = nil
-    let interval: TimeInterval = 3
-    let keep: TimeInterval = 300   // 保留 5 分鐘
+    /// 選單有沒有打開。關著的時候只更新標題（讀一個 JSON，不開 SMC、不畫圖）
+    var panelOpen = false { didSet { if panelOpen { reloadConfig(); tick() } } }
+    let intervalOpen: TimeInterval = 3
+    let intervalIdle: TimeInterval = 5
+    private var timer: Timer?
+    private var localHistory: [HistoryPoint] = []   // guard 沒跑時自己取樣的備援
 
     init() {
         try? SMC.open()
         tick()
-        Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in self?.tick() }
+        schedule()
+    }
+
+    private func schedule() {
+        timer?.invalidate()
+        timer = Timer.scheduledTimer(withTimeInterval: panelOpen ? intervalOpen : intervalIdle, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            self.tick()
+            if (self.timer?.timeInterval ?? 0) != (self.panelOpen ? self.intervalOpen : self.intervalIdle) { self.schedule() }
+        }
+    }
+
+    /// MenuBarExtra(.window) 的內容 view 不一定會 disappear，onAppear 不可靠；直接看有沒有可見視窗
+    var windowVisible: Bool {
+        let ws = (NSApplication.shared as NSApplication?)?.windows ?? []
+        let dbg = ws.map { "\(type(of: $0)) vis=\($0.isVisible) key=\($0.isKeyWindow) occl=\($0.occlusionState.contains(.visible)) alpha=\($0.alphaValue) onscreen=\($0.isOnActiveSpace) frame=\($0.frame) level=\($0.level.rawValue) appActive=\(NSApplication.shared.isActive)" }.joined(separator: "\n")
+        try? (dbg + "\n").write(toFile: "/tmp/cool91.panel.debug", atomically: true, encoding: .utf8)
+        return ws.contains { String(describing: type(of: $0)).hasPrefix("MenuBarExtraWindow") && $0.isVisible }
     }
 
     func tick() {
+        // guard 在跑：只讀快照檔；沒跑才自己開 SMC
         let s = Snapshot.takeFast(config: config)
         snapshot = s
-        history.append(Sample(time: s.time, cpu: s.cpuMax, gpu: s.gpuMax, rpm: s.fans.first?.rpm ?? 0))
-        let cutoff = Date().addingTimeInterval(-keep)
-        history.removeAll { $0.time < cutoff }
+        let open = windowVisible
+        if open != panelOpen { panelOpen = open; return }   // didSet 會再叫一次 tick
+        guard panelOpen else { return }
+        if s.guardRunning {
+            history = History.load()
+        } else {
+            localHistory.append(HistoryPoint(time: s.time, cpu: s.cpuMax, gpu: s.gpuMax, rpm: s.fans.first?.rpm ?? 0, target: nil))
+            localHistory.removeAll { Date().timeIntervalSince($0.time) > History.keep }
+            history = localHistory
+        }
+    }
+
+    /// 外部（手動編輯、另一台面板）改了設定檔也跟上
+    func reloadConfig() {
+        let fresh = Config.load(path: nil)
+        if !dirty { draft = fresh }
+        config = fresh
     }
 
     var dirty: Bool {
-        draft.mode != config.mode || draft.fixedRPM != config.fixedRPM ||
+        draft.mode != config.mode || draft.fixedRPM != config.fixedRPM || draft.includeGPU != config.includeGPU ||
         draft.curve.map { [$0.temp, $0.rpm] } != config.curve.map { [$0.temp, $0.rpm] }
     }
 
@@ -86,7 +114,7 @@ final class Monitor {
 
     var menuTitle: String {
         guard let s = snapshot else { return "cool91" }
-        return "\(s.level.emoji) \(Int(s.cpuMax.rounded()))°"
+        return "\(s.level.emoji) \(Int(s.controlTemp.rounded()))°"
     }
 }
 
@@ -122,6 +150,7 @@ struct PanelView: View {
                 fanRow(s)
                 tempChart
                 fanChart
+                statsRow(s)
                 controls(s)
                 footer
             } else {
@@ -130,6 +159,7 @@ struct PanelView: View {
         }
         .padding(14)
         .frame(width: 320)
+        .onAppear { monitor.tick() }
     }
 
     func header(_ s: Snapshot) -> some View {
@@ -142,6 +172,11 @@ struct PanelView: View {
                 .background(s.level.color.opacity(0.25))
                 .foregroundStyle(s.level.color)
                 .clipShape(Capsule())
+            if let b = s.boostUntil, b > Date() {
+                Text("預熱 \(Int(b.timeIntervalSinceNow))s").font(.caption)
+                    .padding(.horizontal, 8).padding(.vertical, 3)
+                    .background(Color.teal.opacity(0.2)).clipShape(Capsule())
+            }
             Text(s.guardRunning ? "guard 執行中" : "guard 未執行")
                 .font(.caption)
                 .padding(.horizontal, 8).padding(.vertical, 3)
@@ -196,9 +231,9 @@ struct PanelView: View {
             Chart {
                 RuleMark(y: .value("hot", monitor.config.hotTemp)).foregroundStyle(.orange.opacity(0.4)).lineStyle(.init(dash: [3]))
                 RuleMark(y: .value("crit", monitor.config.criticalTemp)).foregroundStyle(.red.opacity(0.4)).lineStyle(.init(dash: [3]))
-                ForEach(monitor.history) { p in
-                    LineMark(x: .value("t", p.time), y: .value("cpu", p.cpu)).foregroundStyle(.orange)
-                    LineMark(x: .value("t", p.time), y: .value("gpu", p.gpu)).foregroundStyle(.blue)
+                ForEach(monitor.history, id: \.time) { p in
+                    LineMark(x: .value("t", p.time), y: .value("cpu", p.cpu), series: .value("s", "cpu")).foregroundStyle(.orange)
+                    LineMark(x: .value("t", p.time), y: .value("gpu", p.gpu), series: .value("s", "gpu")).foregroundStyle(.blue)
                 }
             }
             .chartYScale(domain: 30...110)
@@ -210,14 +245,47 @@ struct PanelView: View {
     var fanChart: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text("風扇轉速").font(.caption).foregroundStyle(.secondary)
-            Chart(monitor.history) { p in
+            Chart(monitor.history, id: \.time) { p in
                 AreaMark(x: .value("t", p.time), y: .value("rpm", p.rpm)).foregroundStyle(.teal.opacity(0.3))
-                LineMark(x: .value("t", p.time), y: .value("rpm", p.rpm)).foregroundStyle(.teal)
+                LineMark(x: .value("t", p.time), y: .value("rpm", p.rpm), series: .value("s", "rpm")).foregroundStyle(.teal)
+                if let t = p.target {
+                    LineMark(x: .value("t", p.time), y: .value("target", t), series: .value("s", "target"))
+                        .foregroundStyle(.secondary.opacity(0.5)).lineStyle(.init(dash: [2, 3]))
+                }
             }
             .chartYScale(domain: 0...(monitor.snapshot?.fans.first?.max ?? 5000))
             .chartXAxis(.hidden)
             .frame(height: 50)
         }
+    }
+
+    @ViewBuilder
+    func statsRow(_ s: Snapshot) -> some View {
+        if let st = s.stats {
+            HStack(spacing: 10) {
+                stat("今日最高", String(format: "%.0f°", st.maxTemp), color: monitor.config.level(for: st.maxTemp).color)
+                stat("hot", hms(st.hotSeconds), color: st.hotSeconds > 0 ? .orange : .secondary)
+                stat("critical", hms(st.criticalSeconds), color: st.criticalSeconds > 0 ? .red : .secondary)
+                stat("hook 等/擋", "\(st.hookWaits)/\(st.hookDenies)", color: .secondary)
+                stat("預熱", "\(st.boosts)", color: .secondary)
+            }
+            .font(.caption2)
+        }
+    }
+
+    func stat(_ name: String, _ v: String, color: Color) -> some View {
+        VStack(spacing: 1) {
+            Text(v).font(.system(.caption, design: .rounded).weight(.semibold)).foregroundStyle(color)
+            Text(name).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    func hms(_ sec: Double) -> String {
+        let s = Int(sec)
+        if s < 60 { return "\(s)s" }
+        if s < 3600 { return "\(s / 60)m" }
+        return String(format: "%.1fh", sec / 3600)
     }
 
     @ViewBuilder
@@ -270,6 +338,8 @@ struct PanelView: View {
             } else {
                 Text("風扇交回 macOS 自己管（M4 mini 預設很保守，CPU 常到 100°C 才加速）").font(.caption2).foregroundStyle(.secondary)
             }
+            Toggle("GPU 溫度也納入控制與把關", isOn: Binding(get: { monitor.draft.includeGPU }, set: { monitor.draft.includeGPU = $0 }))
+                .toggleStyle(.checkbox).font(.caption)
 
             HStack {
                 if let m = monitor.saveMessage { Text(m).font(.caption2).foregroundStyle(m.hasPrefix("寫入失敗") ? .red : .secondary) }

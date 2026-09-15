@@ -22,16 +22,28 @@ public struct Config: Codable {
     public var interval: Double = 5
     /// 目標轉速差距小於此值就不寫 SMC，避免抖動
     public var deadband: Double = 100
-    /// 溫度 EMA 係數（0–1，越小越平滑；1 = 不平滑）
-    public var smoothing: Double = 0.5
-    /// 把關門檻（以 CPU 最高溫為準）
+    /// 溫度 EMA 係數，升溫與降溫分開：升溫反應快、降溫慢慢放，風扇不會忽高忽低
+    public var smoothingUp: Double = 0.7
+    public var smoothingDown: Double = 0.2
+    /// 每輪最多降多少 rpm（0 = 不限制）。升速不限制
+    public var maxRampDown: Double = 300
+    /// 控制與把關是否把 GPU 溫度也算進去（取 CPU/GPU 最高值）
+    public var includeGPU: Bool = true
+    /// 把關門檻（以控制溫度為準）
     public var warmTemp: Double = 80
     public var hotTemp: Double = 90
     public var criticalTemp: Double = 100
-    /// hook 在 hot 時最多等待幾秒降溫
+    /// hook 在 hot 時最多等待幾秒降溫（程式內再夾在 hookWaitCap 以下，避免超過 Claude Code 的 hook timeout）
     public var hookWaitSeconds: Double = 90
+    public static let hookWaitCap: Double = 120
     /// hook 在 critical 時是否直接擋下工具呼叫
     public var hookBlockOnCritical: Bool = true
+    /// critical 時仍放行的指令（降溫、查狀態用）。比對每段指令的第一個 token 的檔名
+    public var hookAllowCommands: [String] = ["cool91", "kill", "pkill", "killall", "pgrep", "ps", "top", "sleep", "cat", "tail", "echo", "launchctl"]
+    /// 預熱：Bash 指令含這些關鍵字時，先把風扇拉到 boostRPM 撐 boostSeconds 秒（之後仍由曲線接管，取較大者）
+    public var boostCommands: [String] = ["swift build", "xcodebuild", "cmake", "ninja", "cargo build", "cargo test", "blender", "ffmpeg", "clang", "gcc", "rustc", "go build", "npm run build", "pytest", "make "]
+    public var boostRPM: Double = 3000
+    public var boostSeconds: Double = 120
     /// 溫度取樣來源前綴：Tp = P-core、Te = E-core、Tg = GPU
     public var cpuPrefixes: [String] = ["Tp", "Te"]
     public var gpuPrefixes: [String] = ["Tg"]
@@ -45,8 +57,9 @@ public struct Config: Codable {
     public private(set) var loadedFrom: String? = nil
 
     enum CodingKeys: String, CodingKey {
-        case curve, mode, fixedRPM, interval, deadband, smoothing, warmTemp, hotTemp, criticalTemp,
-             hookWaitSeconds, hookBlockOnCritical, cpuPrefixes, gpuPrefixes
+        case curve, mode, fixedRPM, interval, deadband, smoothingUp, smoothingDown, maxRampDown, includeGPU,
+             warmTemp, hotTemp, criticalTemp, hookWaitSeconds, hookBlockOnCritical, hookAllowCommands,
+             boostCommands, boostRPM, boostSeconds, cpuPrefixes, gpuPrefixes
     }
 
     public init(from d: Decoder) throws {
@@ -56,25 +69,51 @@ public struct Config: Codable {
         fixedRPM = try c.decodeIfPresent(Double.self, forKey: .fixedRPM) ?? fixedRPM
         interval = try c.decodeIfPresent(Double.self, forKey: .interval) ?? interval
         deadband = try c.decodeIfPresent(Double.self, forKey: .deadband) ?? deadband
-        smoothing = try c.decodeIfPresent(Double.self, forKey: .smoothing) ?? smoothing
+        smoothingUp = try c.decodeIfPresent(Double.self, forKey: .smoothingUp) ?? smoothingUp
+        smoothingDown = try c.decodeIfPresent(Double.self, forKey: .smoothingDown) ?? smoothingDown
+        maxRampDown = try c.decodeIfPresent(Double.self, forKey: .maxRampDown) ?? maxRampDown
+        includeGPU = try c.decodeIfPresent(Bool.self, forKey: .includeGPU) ?? includeGPU
         warmTemp = try c.decodeIfPresent(Double.self, forKey: .warmTemp) ?? warmTemp
         hotTemp = try c.decodeIfPresent(Double.self, forKey: .hotTemp) ?? hotTemp
         criticalTemp = try c.decodeIfPresent(Double.self, forKey: .criticalTemp) ?? criticalTemp
         hookWaitSeconds = try c.decodeIfPresent(Double.self, forKey: .hookWaitSeconds) ?? hookWaitSeconds
         hookBlockOnCritical = try c.decodeIfPresent(Bool.self, forKey: .hookBlockOnCritical) ?? hookBlockOnCritical
+        hookAllowCommands = try c.decodeIfPresent([String].self, forKey: .hookAllowCommands) ?? hookAllowCommands
+        boostCommands = try c.decodeIfPresent([String].self, forKey: .boostCommands) ?? boostCommands
+        boostRPM = try c.decodeIfPresent(Double.self, forKey: .boostRPM) ?? boostRPM
+        boostSeconds = try c.decodeIfPresent(Double.self, forKey: .boostSeconds) ?? boostSeconds
         cpuPrefixes = try c.decodeIfPresent([String].self, forKey: .cpuPrefixes) ?? cpuPrefixes
         gpuPrefixes = try c.decodeIfPresent([String].self, forKey: .gpuPrefixes) ?? gpuPrefixes
+        try validate()
     }
 
+    /// 基本合理性檢查；不合理的設定寧可拒絕載入（guard 會保留上一份）
+    public func validate() throws {
+        guard ["curve", "fixed", "auto"].contains(mode) else { throw Cool91Error.usage("mode 必須是 curve/fixed/auto，收到 \(mode)") }
+        guard !curve.isEmpty else { throw Cool91Error.usage("curve 不能是空的") }
+        guard interval >= 1 else { throw Cool91Error.usage("interval 至少 1 秒") }
+        guard (0...1).contains(smoothingUp), (0...1).contains(smoothingDown) else { throw Cool91Error.usage("smoothingUp/Down 必須在 0–1") }
+        guard warmTemp < hotTemp, hotTemp < criticalTemp else { throw Cool91Error.usage("門檻必須 warm < hot < critical") }
+    }
+
+    /// 讀取指定/預設路徑；全部失敗回預設值。要區分「檔案壞了」和「沒有檔案」請用 loadOrError
     public static func load(path: String?) -> Config {
+        (try? loadOrError(path: path)) ?? Config()
+    }
+
+    /// 明確回報解析錯誤（guard 熱重載用：壞掉時保留舊設定）
+    public static func loadOrError(path: String?) throws -> Config {
         let candidates = path.map { [$0] } ?? defaultPaths
+        var lastError: Error? = nil
         for p in candidates {
-            if let d = FileManager.default.contents(atPath: p),
-               var c = try? JSONDecoder().decode(Config.self, from: d) {
+            guard let d = FileManager.default.contents(atPath: p) else { continue }
+            do {
+                var c = try JSONDecoder().decode(Config.self, from: d)
                 c.loadedFrom = p
                 return c
-            }
+            } catch { lastError = error }
         }
+        if let lastError { throw lastError }
         return Config()
     }
 
@@ -85,6 +124,7 @@ public struct Config: Codable {
     }
 
     /// 寫回檔案（面板用）；預設寫到載入來源，沒有就寫 ~/.config/cool91/config.json
+    /// /etc/cool91 目錄是 root 的，無法用 .atomic（要在同目錄建暫存檔），所以直接覆寫；guard 那端讀到半截會保留舊設定重試
     public func save(to path: String? = nil) throws {
         let target = path ?? loadedFrom ?? Config.defaultPaths[1]
         try FileManager.default.createDirectory(atPath: (target as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
