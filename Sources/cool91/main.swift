@@ -149,7 +149,7 @@ func runHook(config: Config) {
             "permissionDecision": "deny",
             "permissionDecisionReason": "\(note)：CPU 已達 critical（≥\(Int(config.criticalTemp))°C），等了 \(Int(waited)) 秒仍未降溫。先讓機器冷卻再重試（可執行 `cool91 wait`）。",
         ]
-    } else if s.level >= .hot || waited > 0 {
+    } else if s.level >= .hot || waited >= 1 {
         out["systemMessage"] = "\(note)：機器偏熱（已等待 \(Int(waited)) 秒）。建議避免同時開多個重負載工作。"
     }
     if let d = try? JSONSerialization.data(withJSONObject: out), let str = String(data: d, encoding: .utf8) {
