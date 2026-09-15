@@ -137,6 +137,69 @@ extension Level {
     }
 }
 
+// MARK: - 漸層微光風格
+
+/// 深色底 + 霓虹線 + 線下漸層消失。發光用三層同路徑線疊出來（Charts 的 mark 不能 blur）
+enum Neon {
+    static let cyan   = Color(red: 0.16, green: 0.87, blue: 0.96)
+    static let green  = Color(red: 0.36, green: 0.95, blue: 0.55)
+    static let purple = Color(red: 0.72, green: 0.56, blue: 1.00)
+    static let violet = Color(red: 0.50, green: 0.25, blue: 0.95)
+    static let amber  = Color(red: 1.00, green: 0.72, blue: 0.30)
+    static let red    = Color(red: 1.00, green: 0.36, blue: 0.42)
+    static let plotBG = Color(red: 0.04, green: 0.05, blue: 0.09)
+
+    /// 線下漸層：上濃下淡到透明
+    static func fade(_ c: Color, top: Double = 0.45) -> LinearGradient {
+        LinearGradient(colors: [c.opacity(top), c.opacity(0.12), c.opacity(0)], startPoint: .top, endPoint: .bottom)
+    }
+    /// 風扇條 / 強調用的橫向漸層
+    static func sweep(_ a: Color, _ b: Color) -> LinearGradient {
+        LinearGradient(colors: [a, b], startPoint: .leading, endPoint: .trailing)
+    }
+}
+
+extension Level {
+    var neon: Color {
+        switch self {
+        case .ok: return Neon.green
+        case .warm: return Neon.amber
+        case .hot: return Neon.amber
+        case .critical: return Neon.red
+        }
+    }
+}
+
+/// 三層疊出來的發光線：寬淡暈 → 中暈 → 細實線
+@ChartContentBuilder
+func glowLine<X: Plottable, Y: Plottable>(x: PlottableValue<X>, y: PlottableValue<Y>, series: String, color: Color, smooth: Bool = true) -> some ChartContent {
+    LineMark(x: x, y: y, series: .value("s", series + "•halo")).foregroundStyle(color.opacity(0.10)).lineStyle(.init(lineWidth: 10, lineCap: .round, lineJoin: .round)).interpolationMethod(smooth ? .catmullRom : .linear)
+    LineMark(x: x, y: y, series: .value("s", series + "•glow")).foregroundStyle(color.opacity(0.28)).lineStyle(.init(lineWidth: 4.5, lineCap: .round, lineJoin: .round)).interpolationMethod(smooth ? .catmullRom : .linear)
+    LineMark(x: x, y: y, series: .value("s", series)).foregroundStyle(color).lineStyle(.init(lineWidth: 1.6, lineCap: .round, lineJoin: .round)).interpolationMethod(smooth ? .catmullRom : .linear)
+}
+
+/// 發光點：大暈 + 小實點
+@ChartContentBuilder
+func glowPoint<X: Plottable, Y: Plottable>(x: PlottableValue<X>, y: PlottableValue<Y>, color: Color, size: CGFloat = 40) -> some ChartContent {
+    PointMark(x: x, y: y).foregroundStyle(color.opacity(0.18)).symbolSize(size * 4)
+    PointMark(x: x, y: y).foregroundStyle(color.opacity(0.45)).symbolSize(size * 1.8)
+    PointMark(x: x, y: y).foregroundStyle(color).symbolSize(size)
+}
+
+/// 所有圖共用的底：深色 plot 背景、淡格線、隱藏 X 軸
+struct NeonPlot: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .chartXAxis(.hidden)
+            .chartYAxis { AxisMarks(position: .trailing) { _ in
+                AxisGridLine().foregroundStyle(Color.white.opacity(0.06))
+                AxisValueLabel().font(.system(size: 9)).foregroundStyle(Color.white.opacity(0.45))
+            } }
+            .chartPlotStyle { $0.background(Neon.plotBG).clipShape(RoundedRectangle(cornerRadius: 6)) }
+    }
+}
+extension View { func neonPlot() -> some View { modifier(NeonPlot()) } }
+
 // MARK: - 畫面
 
 struct PanelView: View {
@@ -193,15 +256,15 @@ struct PanelView: View {
 
     func tiles(_ s: Snapshot) -> some View {
         HStack(spacing: 6) {
-            tile("CPU", String(format: "%.0f°", s.cpuMax), sub: String(format: "avg %.0f°", s.cpuAvg), color: s.level.color)
-            tile("GPU", String(format: "%.0f°", s.gpuMax), sub: "最高", color: .blue)
-            tile("SSD", String(format: "%.0f°", s.ssd ?? 0), sub: "", color: .teal)
+            tile("CPU", String(format: "%.0f°", s.cpuMax), sub: String(format: "avg %.0f°", s.cpuAvg), color: Neon.cyan)
+            tile("GPU", String(format: "%.0f°", s.gpuMax), sub: "最高", color: Neon.green)
+            tile("SSD", String(format: "%.0f°", s.ssd ?? 0), sub: "", color: Color.white.opacity(0.75))
             if let p = s.pcoreMHz {
                 // P-core 硬體頻率：M4 滿載正常 3.9–4.4，掉到 3.8 以下且 pressure 非 Nominal = 熱降頻；cluster 閒置時韌體回 0
                 let idle = p < 100
                 tile("P-core", idle ? "閒置" : String(format: "%.2f", p / 1000),
                      sub: s.throttling ? "降頻 " + (s.thermalPressure ?? "") : idle ? "GHz" : String(format: "GHz · E %.1f", (s.ecoreMHz ?? 0) / 1000),
-                     color: s.throttling ? .red : idle ? .secondary : .purple)
+                     color: s.throttling ? Neon.red : idle ? .secondary : Neon.purple)
             }
         }
     }
@@ -210,6 +273,7 @@ struct PanelView: View {
         VStack(alignment: .leading, spacing: 2) {
             Text(name).font(.caption).foregroundStyle(.secondary)
             Text(v).font(.system(size: 20, weight: .semibold, design: .rounded)).foregroundStyle(color).lineLimit(1).minimumScaleFactor(0.7)
+                .shadow(color: color.opacity(0.55), radius: 6)
             Text(sub).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -222,13 +286,22 @@ struct PanelView: View {
         ForEach(s.fans, id: \.index) { f in
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
-                    Image(systemName: "fan.fill")
+                    Image(systemName: "fan.fill").foregroundStyle(Neon.cyan)
                     Text(String(format: "%.0f rpm", f.rpm)).font(.system(.title3, design: .rounded).weight(.semibold))
                     Spacer()
                     Text(f.manual ? String(format: "目標 %.0f · 手動", f.target) : "自動")
                         .font(.caption).foregroundStyle(.secondary)
                 }
-                ProgressView(value: max(0, f.rpm - f.min), total: max(1, f.max - f.min))
+                GeometryReader { g in
+                    let frac = min(1, max(0, (f.rpm - f.min) / max(1, f.max - f.min)))
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(Color.white.opacity(0.07))
+                        Capsule().fill(Neon.sweep(Neon.cyan, Neon.violet))
+                            .frame(width: max(6, g.size.width * frac))
+                            .shadow(color: Neon.cyan.opacity(0.6), radius: 5)
+                    }
+                }
+                .frame(height: 6)
                 HStack {
                     Text(String(format: "%.0f", f.min)).font(.caption2).foregroundStyle(.secondary)
                     Spacer()
@@ -240,47 +313,83 @@ struct PanelView: View {
 
     var tempChart: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text("CPU 溫度（5 分鐘）").font(.caption).foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                Text("溫度（5 分鐘）").font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                legend("CPU", Neon.cyan); legend("GPU", Neon.green)
+            }
             Chart {
-                RuleMark(y: .value("hot", monitor.config.hotTemp)).foregroundStyle(.orange.opacity(0.4)).lineStyle(.init(dash: [3]))
-                RuleMark(y: .value("crit", monitor.config.criticalTemp)).foregroundStyle(.red.opacity(0.4)).lineStyle(.init(dash: [3]))
+                RuleMark(y: .value("hot", monitor.config.hotTemp)).foregroundStyle(Neon.amber.opacity(0.35)).lineStyle(.init(dash: [3]))
+                RuleMark(y: .value("crit", monitor.config.criticalTemp)).foregroundStyle(Neon.red.opacity(0.35)).lineStyle(.init(dash: [3]))
                 ForEach(monitor.history, id: \.time) { p in
-                    LineMark(x: .value("t", p.time), y: .value("cpu", p.cpu), series: .value("s", "cpu")).foregroundStyle(.orange)
-                    LineMark(x: .value("t", p.time), y: .value("gpu", p.gpu), series: .value("s", "gpu")).foregroundStyle(.blue)
+                    AreaMark(x: .value("t", p.time), yStart: .value("b", 30), yEnd: .value("cpu", p.cpu), series: .value("s", "cpu•a"))
+                        .foregroundStyle(Neon.fade(Neon.cyan, top: 0.35)).interpolationMethod(.catmullRom)
+                }
+                ForEach(monitor.history, id: \.time) { p in
+                    glowLine(x: .value("t", p.time), y: .value("gpu", p.gpu), series: "gpu", color: Neon.green)
+                }
+                ForEach(monitor.history, id: \.time) { p in
+                    glowLine(x: .value("t", p.time), y: .value("cpu", p.cpu), series: "cpu", color: Neon.cyan)
                 }
             }
             .chartYScale(domain: 30...110)
-            .chartXAxis(.hidden)
-            .frame(height: 80)
+            .neonPlot()
+            .frame(height: 84)
         }
     }
 
     var fanChart: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text("風扇轉速").font(.caption).foregroundStyle(.secondary)
-            Chart(monitor.history, id: \.time) { p in
-                AreaMark(x: .value("t", p.time), y: .value("rpm", p.rpm)).foregroundStyle(.teal.opacity(0.3))
-                LineMark(x: .value("t", p.time), y: .value("rpm", p.rpm), series: .value("s", "rpm")).foregroundStyle(.teal)
-                if let t = p.target {
-                    LineMark(x: .value("t", p.time), y: .value("target", t), series: .value("s", "target"))
-                        .foregroundStyle(.secondary.opacity(0.5)).lineStyle(.init(dash: [2, 3]))
+            HStack(spacing: 8) {
+                Text("風扇轉速").font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                legend("實際", Neon.purple); legend("目標", Color.white.opacity(0.5), dashed: true)
+            }
+            Chart {
+                ForEach(monitor.history, id: \.time) { p in
+                    AreaMark(x: .value("t", p.time), y: .value("rpm", p.rpm), series: .value("s", "rpm•a"))
+                        .foregroundStyle(Neon.fade(Neon.purple, top: 0.5)).interpolationMethod(.catmullRom)
+                }
+                ForEach(monitor.history.filter { $0.target != nil }, id: \.time) { p in
+                    LineMark(x: .value("t", p.time), y: .value("target", p.target ?? 0), series: .value("s", "target"))
+                        .foregroundStyle(Color.white.opacity(0.35)).lineStyle(.init(lineWidth: 1, dash: [2, 3]))
+                }
+                ForEach(monitor.history, id: \.time) { p in
+                    glowLine(x: .value("t", p.time), y: .value("rpm", p.rpm), series: "rpm", color: Neon.purple)
                 }
             }
             .chartYScale(domain: 0...(monitor.snapshot?.fans.first?.max ?? 5000))
-            .chartXAxis(.hidden)
-            .frame(height: 50)
+            .neonPlot()
+            .frame(height: 56)
         }
     }
 
     var freqChart: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text("P-core 頻率（GHz）").font(.caption).foregroundStyle(.secondary)
-            Chart(monitor.history.filter { ($0.pMHz ?? 0) >= 100 }, id: \.time) { p in   // 閒置（0）不畫，留缺口
-                LineMark(x: .value("t", p.time), y: .value("GHz", (p.pMHz ?? 0) / 1000), series: .value("s", "p")).foregroundStyle(.purple)
+            Chart {
+                ForEach(monitor.history.filter { ($0.pMHz ?? 0) >= 100 }, id: \.time) { p in   // 閒置（0）不畫，留缺口
+                    AreaMark(x: .value("t", p.time), yStart: .value("b", 0.9), yEnd: .value("GHz", (p.pMHz ?? 0) / 1000), series: .value("s", "p•a"))
+                        .foregroundStyle(Neon.fade(Neon.green, top: 0.3)).interpolationMethod(.catmullRom)
+                }
+                ForEach(monitor.history.filter { ($0.pMHz ?? 0) >= 100 }, id: \.time) { p in
+                    glowLine(x: .value("t", p.time), y: .value("GHz", (p.pMHz ?? 0) / 1000), series: "p", color: Neon.green)
+                }
             }
             .chartYScale(domain: 0.9...4.5)
-            .chartXAxis(.hidden)
-            .frame(height: 50)
+            .neonPlot()
+            .frame(height: 56)
+        }
+    }
+
+    func legend(_ name: String, _ color: Color, dashed: Bool = false) -> some View {
+        HStack(spacing: 3) {
+            if dashed {
+                Rectangle().fill(color).frame(width: 10, height: 1).overlay(Rectangle().stroke(style: .init(lineWidth: 1, dash: [2, 2])).foregroundStyle(color))
+            } else {
+                Capsule().fill(color).frame(width: 10, height: 2).shadow(color: color.opacity(0.8), radius: 2)
+            }
+            Text(name).font(.system(size: 9)).foregroundStyle(.secondary)
         }
     }
 
@@ -407,9 +516,10 @@ struct PanelView: View {
             Text(title)
                 .font(.caption.weight(selected ? .semibold : .regular))
                 .padding(.horizontal, 10).padding(.vertical, 4)
-                .background(selected ? Color.accentColor : Color.secondary.opacity(0.12))
+                .background(selected ? AnyShapeStyle(Neon.sweep(Neon.cyan, Neon.violet)) : AnyShapeStyle(Color.white.opacity(0.08)))
                 .foregroundStyle(selected ? Color.white : Color.primary)
                 .clipShape(Capsule())
+                .shadow(color: selected ? Neon.cyan.opacity(0.5) : .clear, radius: 5)
         }
         .buttonStyle(.plain)
     }
@@ -419,37 +529,47 @@ struct PanelView: View {
         let pts = monitor.draft.curve.sorted { $0.temp < $1.temp }
         let tNow = min(max(s.controlTemp, 40), 108)
         let rpmNow = s.fans.first?.rpm ?? fmin
+        // 曲線兩端延伸到圖的邊界
+        let ext: [(Double, Double)] = pts.isEmpty ? [] : [(40, pts.first!.rpm)] + pts.map { ($0.temp, $0.rpm) } + [(108, pts.last!.rpm)]
         return Chart {
-            RuleMark(x: .value("hot", monitor.config.hotTemp)).foregroundStyle(.orange.opacity(0.35)).lineStyle(.init(dash: [3]))
-            RuleMark(x: .value("crit", monitor.config.criticalTemp)).foregroundStyle(.red.opacity(0.35)).lineStyle(.init(dash: [3]))
+            RuleMark(x: .value("hot", monitor.config.hotTemp)).foregroundStyle(Neon.amber.opacity(0.3)).lineStyle(.init(dash: [3]))
+            RuleMark(x: .value("crit", monitor.config.criticalTemp)).foregroundStyle(Neon.red.opacity(0.3)).lineStyle(.init(dash: [3]))
             if let fixed {
-                RuleMark(y: .value("rpm", fixed)).foregroundStyle(.teal)
+                AreaMark(x: .value("t", 40), yStart: .value("a", fmin), yEnd: .value("rpm", fixed), series: .value("s", "fa")).foregroundStyle(Neon.fade(Neon.cyan, top: 0.3))
+                AreaMark(x: .value("t", 108), yStart: .value("a", fmin), yEnd: .value("rpm", fixed), series: .value("s", "fa")).foregroundStyle(Neon.fade(Neon.cyan, top: 0.3))
+                glowLine(x: .value("t", 40.0), y: .value("rpm", fixed), series: "f", color: Neon.cyan, smooth: false)
+                glowLine(x: .value("t", 108.0), y: .value("rpm", fixed), series: "f", color: Neon.cyan, smooth: false)
             } else {
-                // 曲線兩端延伸到圖的邊界
-                if let f = pts.first { LineMark(x: .value("t", 40), y: .value("rpm", f.rpm), series: .value("s", "c")).foregroundStyle(.teal) }
-                ForEach(Array(pts.enumerated()), id: \.offset) { _, p in
-                    LineMark(x: .value("t", p.temp), y: .value("rpm", p.rpm), series: .value("s", "c")).foregroundStyle(.teal)
-                    PointMark(x: .value("t", p.temp), y: .value("rpm", p.rpm)).foregroundStyle(.teal).symbolSize(20)
+                ForEach(Array(ext.enumerated()), id: \.offset) { _, p in
+                    AreaMark(x: .value("t", p.0), yStart: .value("a", fmin), yEnd: .value("rpm", p.1), series: .value("s", "a")).foregroundStyle(Neon.fade(Neon.cyan, top: 0.35))
                 }
-                if let l = pts.last { LineMark(x: .value("t", 108), y: .value("rpm", l.rpm), series: .value("s", "c")).foregroundStyle(.teal) }
-                AreaMark(x: .value("t", 40), yStart: .value("a", fmin), yEnd: .value("rpm", pts.first?.rpm ?? fmin), series: .value("s", "a")).foregroundStyle(.teal.opacity(0.08))
-                ForEach(Array(pts.enumerated()), id: \.offset) { _, p in
-                    AreaMark(x: .value("t", p.temp), yStart: .value("a", fmin), yEnd: .value("rpm", p.rpm), series: .value("s", "a")).foregroundStyle(.teal.opacity(0.08))
+                ForEach(Array(ext.enumerated()), id: \.offset) { _, p in
+                    glowLine(x: .value("t", p.0), y: .value("rpm", p.1), series: "c", color: Neon.cyan, smooth: false)
                 }
-                AreaMark(x: .value("t", 108), yStart: .value("a", fmin), yEnd: .value("rpm", pts.last?.rpm ?? fmin), series: .value("s", "a")).foregroundStyle(.teal.opacity(0.08))
+                ForEach(Array(pts.enumerated()), id: \.offset) { _, p in
+                    PointMark(x: .value("t", p.temp), y: .value("rpm", p.rpm)).foregroundStyle(Neon.cyan).symbolSize(14)
+                }
             }
             // 目前位置
-            RuleMark(x: .value("now", tNow)).foregroundStyle(s.level.color.opacity(0.5)).lineStyle(.init(lineWidth: 1))
-            PointMark(x: .value("now", tNow), y: .value("rpm", rpmNow)).foregroundStyle(s.level.color).symbolSize(45)
-                .annotation(position: tNow > 85 ? .leading : .trailing, alignment: .center, spacing: 4) {
-                    Text(String(format: "%.0f° · %.0f rpm", s.controlTemp, rpmNow)).font(.system(size: 9, design: .monospaced)).foregroundStyle(s.level.color)
+            RuleMark(x: .value("now", tNow)).foregroundStyle(s.level.neon.opacity(0.45)).lineStyle(.init(lineWidth: 1))
+            glowPoint(x: .value("now", tNow), y: .value("rpm", rpmNow), color: s.level.neon, size: 28)
+            PointMark(x: .value("now", tNow), y: .value("rpm", rpmNow)).opacity(0)
+                .annotation(position: tNow > 85 ? .leading : .trailing, alignment: .center, spacing: 6) {
+                    Text(String(format: "%.0f° · %.0f rpm", s.controlTemp, rpmNow)).font(.system(size: 9, design: .monospaced)).foregroundStyle(s.level.neon)
                 }
         }
         .chartXScale(domain: 40...108)
         .chartYScale(domain: fmin...fmax)
-        .chartXAxis { AxisMarks(values: [50, 60, 70, 80, 90, 100]) { v in AxisValueLabel { if let t = v.as(Int.self) { Text("\(t)°").font(.system(size: 9)) } } } }
-        .chartYAxis { AxisMarks(values: [1000, 2000, 3000, 4000]) { v in AxisGridLine().foregroundStyle(.secondary.opacity(0.15)); AxisValueLabel { if let r = v.as(Int.self) { Text("\(r / 1000)k").font(.system(size: 9)) } } } }
-        .frame(height: 96)
+        .chartXAxis { AxisMarks(values: [50, 60, 70, 80, 90, 100]) { v in
+            AxisGridLine().foregroundStyle(Color.white.opacity(0.05))
+            AxisValueLabel { if let t = v.as(Int.self) { Text("\(t)°").font(.system(size: 9)).foregroundStyle(Color.white.opacity(0.45)) } }
+        } }
+        .chartYAxis { AxisMarks(position: .trailing, values: [1000, 2000, 3000, 4000]) { v in
+            AxisGridLine().foregroundStyle(Color.white.opacity(0.06))
+            AxisValueLabel { if let r = v.as(Int.self) { Text("\(r / 1000)k").font(.system(size: 9)).foregroundStyle(Color.white.opacity(0.45)) } }
+        } }
+        .chartPlotStyle { $0.background(Neon.plotBG).clipShape(RoundedRectangle(cornerRadius: 6)) }
+        .frame(height: 100)
     }
 
     var footer: some View {
