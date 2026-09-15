@@ -232,6 +232,7 @@ docs/                   A/B 實測資料
 
 ## 文件
 
+- [`docs/findings-m4-sensors.md`](docs/findings-m4-sensors.md) — **技術發現整理（中英）**：M4 上 IOReport 頻率 / IOHID 溫度 / SMC / powermetrics 四條路徑同秒對照，哪些是真的；原廠風扇策略數據；agent 自我節流的判斷依據
 - [`docs/ab-test-2026-09-16/`](docs/ab-test-2026-09-16/) — 曲線 A/B 實測原始資料、powermetrics 輸出、外部參考資料
 - [`CHANGELOG.md`](CHANGELOG.md)
 
