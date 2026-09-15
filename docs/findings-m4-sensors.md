@@ -26,7 +26,7 @@ E-core 也有同樣現象：IOReport `ECPU` 100% 在 `V7P0`（表值 2892），�
 
 ## 2. 溫度：IOHID 的「CPU 溫度」是 PMU 溫度
 
-不需 root 的第二條路是 `IOHIDEventSystemClient`（usage page 0xff00 / usage 5），讀到 40 個溫度感測器，名稱是 `PMU tdie1…14`、`PMU tdev1…8`、`PMU tcal`、`PMU2 …`、`NAND CH0 temp`。macmon 之類的工具拿 `PMU tdie` 平均當 CPU 溫度。
+不需 root 的第二條路是 `IOHIDEventSystemClient`（usage page 0xff00 / usage 5），在 M4 上讀到 40 個溫度感測器，名稱是 `PMU tdie1…14`、`PMU tdev1…8`、`PMU tcal`、`PMU2 …`、`NAND CH0 temp`。M1 世代這條路還有 `pACC MTR Temp Sensor`（真正的核心感測器），M4 上已經沒有，只剩 PMU 系列 —— 所以在 M4 上靠 IOHID 拿 CPU 溫度，拿到的只能是 PMU 溫度。（macmon 在 macOS 14+ 已改走 SMC `Tp/Te/Ts` 取平均，只有舊系統才退回 IOHID；其他只走 IOHID 的小工具則會落到 PMU 值。）
 
 同時刻對照 SMC（`AppleSMC` IOKit service，`IOConnectCallStructMethod` selector 2，不需 root）：
 
@@ -39,7 +39,7 @@ E-core 也有同樣現象：IOReport `ECPU` 100% 在 `V7P0`（表值 2892），�
 
 SMC 的 `Tp*` 是 SoC 內每顆 P-core 旁的感測器（M4 有 55 個 `Tp*`/`Te*` key），`TCMz` 是 Apple 自己的「SoC 最高溫」聚合 key，實測 `TCMz == max(Tp*)`。熱管理與降頻看的是這個。
 
-**結論**：IOHID 溫度趨勢對、絕對值不對。看到別的工具 CPU 溫度比 SMC 讀的低 15–20°C，不是 SMC 虛高。
+**結論**：IOHID 溫度趨勢對、絕對值不對。看到別的工具 CPU 溫度比 SMC 讀的低 15–20°C，不是 SMC 虛高。另一個常見差異是「平均 vs 最高」：macmon 顯示 SMC 各 key 的平均（M4 重載時約 60–68°C），cool91 用最高值（同時刻 78–85°C），因為熱管理與降頻看的是熱點。兩者都對，只是問的問題不同。
 
 ## 3. M4 上 SMC 的溫度 key 有 1375 個，不用寫死
 
@@ -77,7 +77,7 @@ hook 本身不開 SMC、不跑 powermetrics，只讀 guard 每 5 秒寫的 JSON 
 **Setup**: Mac mini M4 (Mac16,10), macOS 26. All comparisons are same-second.
 
 1. **IOReport CPU frequency is the software-requested DVFS state, not the hardware frequency.** Under sustained load, IOReport `CPU Core Performance States` sits at 100% `V19P0` (table value 4464 MHz) while `powermetrics` `P-Cluster HW active frequency` reads 3936–4187 MHz. All four IOReport CPU channel groups behave the same. Tools that derive frequency from IOReport (macmon, asitop, …) cannot see power/thermal throttling on M4. Hardware frequency requires `powermetrics` (root). Note: `powermetrics -n 0` exits after one sample; omit `-n` for unlimited. A resident `-i 5000` process costs 0.18% CPU.
-2. **IOHID "CPU temperature" is the PMU die temperature.** `PMU tdie` max 62°C vs SMC `Tp*` max 78–85°C at the same instant. PMU = Power Management Unit, a separate IC. SMC `TCMz` (Apple's own SoC-max key) equals `max(Tp*)` exactly. IOHID tracks the trend but reads 15–20°C low.
+2. **On M4, IOHID only exposes PMU temperatures.** The `pACC MTR Temp Sensor` entries that existed on M1 are gone; what's left is `PMU tdie/tdev/tcal`. `PMU tdie` max 62°C vs SMC `Tp*` max 78–85°C at the same instant. PMU = Power Management Unit, a separate IC. SMC `TCMz` (Apple's own SoC-max key) equals `max(Tp*)` exactly. IOHID tracks the trend but reads 15–20°C low. (macmon uses SMC on macOS 14+, averaged; cool91 uses the max because throttling follows the hotspot.)
 3. **M4 exposes 1375 SMC keys**; temperature keys can be discovered at runtime (`T*`, type `flt`/`sp78`, 10–120 range) and grouped by prefix (`Tp` P-core, `Te` E-core, `Tg` GPU, `TH0` SSD). Fan: `F0Ac/F0Tg/F0Mn/F0Mx/F0Md`.
 4. **Stock M4 mini fan policy**: 96–105°C at 1000–1774 rpm; P-cores drop from 4464 to 3300–3800 MHz after 10–15 min. A curve holding 3150 rpm keeps the SoC at 87°C with no throttling (pressure Nominal, 3936 MHz).
 5. **Agent self-throttling**: gate a coding agent's tool calls on thermal pressure (Nominal → go; Moderate/Heavy → wait; Trapping → deny), not on temperature. The fan's job is to prevent throttling; the gate's job is to act only when it actually happens.

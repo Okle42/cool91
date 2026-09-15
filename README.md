@@ -201,7 +201,7 @@ Claude Code hook 預設 60 秒逾時，而等待上限是 90 秒 —— hook 設
 `cp` 新版到 `/usr/local/bin/cool91` 之後，所有新啟動的 process 都以 `OS_REASON_CODESIGNING` 被殺 —— 舊 inode 的簽章快取還在。要 `cp` 到 `.new` 再 `mv` 換 inode。另外 `launchctl bootout` 後要等 launchd 真的清完再 `bootstrap`，否則回 `error 5`。
 
 **14. 別的工具顯示的「CPU 溫度」比 cool91 低 15–20°C**
-驗證數值時用 IOHID（`IOHIDEventSystemClient`，macmon / asitop 走的路）交叉比對，讀到 `PMU tdie` 最高 62°C，cool91 同時刻 78°C。查清楚後：**PMU = Power Management Unit，電源管理晶片**，是主機板上另一顆 IC（M 系列有兩顆，`PMU` / `PMU2`），負責把電源轉成 SoC 各區域的電壓。`PMU tdie` 是它自己的 die 溫度、`tdev` 是它量的周邊、`tcal` 是校正參考。它供電給 CPU，所以趨勢跟著 CPU 走，但物理上離核心熱點有一段距離，絕對值天生低 15–20°C。IOHID 不需要 root 也不用碰 SMC 私有結構，圖方便的工具就拿它當 CPU 溫度 —— 趨勢對、數值不對。cool91 讀的 `Tp*` 是 M4 SoC 內每顆 P-core 旁的感測器，也是 Apple 自己的聚合 key `TCMz`（SoC 最高溫）的來源；實測 `TCMz` 與 cool91 的 `cpuMax` 完全相等。熱管理與降頻看的是這個，風扇要管的也是這個。
+驗證數值時用 IOHID（`IOHIDEventSystemClient`，不需 root 的另一條路）交叉比對，M4 上只讀到 `PMU tdie` 系列，最高 62°C，cool91 同時刻 78°C。查清楚後：**PMU = Power Management Unit，電源管理晶片**，是主機板上另一顆 IC（M 系列有兩顆，`PMU` / `PMU2`），負責把電源轉成 SoC 各區域的電壓。`PMU tdie` 是它自己的 die 溫度、`tdev` 是它量的周邊、`tcal` 是校正參考。它供電給 CPU，所以趨勢跟著 CPU 走，但物理上離核心熱點有一段距離，絕對值天生低 15–20°C。M1 世代 IOHID 還有 `pACC MTR Temp Sensor`（真正的核心感測器），M4 上沒了，只走 IOHID 的工具在 M4 就只能拿到 PMU 值 —— 趨勢對、數值不對。另一個常見差異是平均 vs 最高：macmon 顯示 SMC 各 key 的平均（重載約 60–68°C），cool91 用最高（同時刻 78–85°C），因為降頻看的是熱點。cool91 讀的 `Tp*` 是 M4 SoC 內每顆 P-core 旁的感測器，也是 Apple 自己的聚合 key `TCMz`（SoC 最高溫）的來源；實測 `TCMz` 與 cool91 的 `cpuMax` 完全相等。熱管理與降頻看的是這個，風扇要管的也是這個。
 
 **15. main.swift 頂層變數的初始化順序**
 `main.swift` 的頂層 `let` 是依序執行的，`runGuard` 在 `switch` 裡被呼叫時，寫在後面的 `DateFormatter` 還沒建好，時間戳輸出空字串。放進 `enum` 用 `static let`（lazy）就好。
