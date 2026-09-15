@@ -175,10 +175,11 @@ func commandNeedsBoost(_ command: String, keywords: [String]) -> Bool {
     return false
 }
 
-/// Claude Code PreToolUse hook：
-///   ok/warm → 直接放行（重指令先發預熱事件）
-///   hot     → 等待降溫（最多 hookWaitSeconds，且不超過 hookWaitCap），之後放行並附警告
-///   critical→ 依設定擋下（deny）或放行附警告
+/// Claude Code PreToolUse hook（讓機器全力開工、風扇負責避免降頻；只有「真的降頻了」才讓工作等）：
+///   pressure Nominal        → 放行，不管溫度（重指令先發預熱事件）
+///   pressure Moderate/Heavy → 等它回 Nominal（最多 hookWaitSeconds，且不超過 hookWaitCap），之後放行並附說明
+///   pressure Trapping / 溫度 critical → 依設定擋下（deny）
+///   拿不到 pressure（guard 沒跑）→ 退回溫度門檻：hot 等、critical 擋
 ///   白名單指令（cool91 / kill / …）任何等級都放行，否則 critical 時連降溫指令都跑不了
 func runHook(config: Config) {
     let input = FileHandle.standardInput.readDataToEndOfFile()
@@ -194,26 +195,48 @@ func runHook(config: Config) {
 
     var s = Snapshot.takeFast(config: config)
     var waited = 0.0
-    if s.level >= .hot && !allowed {
+    // 判斷依據：有 thermal pressure（guard 以 root 從 powermetrics 讀到）就看它 —— 溫度高但沒降頻是風扇的事，不該讓工作等；
+    // 拿不到才退回溫度門檻。critical 溫度不管 pressure 都算（安全底線）
+    func verdict(_ s: Snapshot) -> (wait: Bool, block: Bool) {
+        if s.level == .critical { return (true, config.hookBlockOnCritical) }
+        if let pr = s.thermalPressure {
+            switch pr {
+            case "Nominal": return (false, false)
+            case "Trapping", "Sleeping": return (true, config.hookBlockOnCritical)
+            default: return (true, false)   // Moderate / Heavy：等它回 Nominal
+            }
+        }
+        return (s.level >= .hot, false)
+    }
+    var v = verdict(s)
+    if v.wait && !allowed {
         let start = Date()
-        _ = waitUntilCool(below: config.hotTemp, timeout: min(config.hookWaitSeconds, Config.hookWaitCap), config: config) { _ in }
+        let deadline = start.addingTimeInterval(min(config.hookWaitSeconds, Config.hookWaitCap))
+        while Date() < deadline {
+            Thread.sleep(forTimeInterval: 2)
+            s = Snapshot.takeFast(config: config)
+            v = verdict(s)
+            if !v.wait { break }
+        }
         waited = Date().timeIntervalSince(start)
-        s = Snapshot.takeFast(config: config)
         Event(kind: .hookWait, seconds: waited).post()
     }
     var out: [String: Any] = [:]
-    let note = String(format: "cool91 %@ %.0f°C 風扇 %.0f rpm", s.level.emoji, s.controlTemp, s.fans.first?.rpm ?? 0)
-    if s.level == .critical && config.hookBlockOnCritical && !allowed {
+    var note = String(format: "cool91 %@ %.0f°C 風扇 %.0f rpm", s.level.emoji, s.controlTemp, s.fans.first?.rpm ?? 0)
+    if let p = s.pcoreMHz { note += String(format: " P-core %.2f GHz", p / 1000) }
+    if let pr = s.thermalPressure { note += " pressure \(pr)" }
+    if v.wait && v.block && !allowed {
         Event(kind: .hookDeny).post()
+        let why = s.level == .critical ? "溫度已達 critical（≥\(Int(config.criticalTemp))°C）" : "thermal pressure \(s.thermalPressure ?? "?")"
         out["hookSpecificOutput"] = [
             "hookEventName": "PreToolUse",
             "permissionDecision": "deny",
-            "permissionDecisionReason": "\(note)：已達 critical（≥\(Int(config.criticalTemp))°C），等了 \(Int(waited)) 秒仍未降溫。先讓機器冷卻再重試（`cool91 wait` 與 kill/pkill 等降溫指令不受限）。",
+            "permissionDecisionReason": "\(note)：\(why)，等了 \(Int(waited)) 秒仍未恢復。先讓機器冷卻再重試（`cool91 wait` 與 kill/pkill 等降溫指令不受限）。",
         ]
-    } else if allowed && s.level >= .hot {
+    } else if allowed && v.wait {
         out["systemMessage"] = "\(note)：白名單指令放行。"
-    } else if s.level >= .hot || waited >= 1 {
-        out["systemMessage"] = "\(note)：機器偏熱（已等待 \(Int(waited)) 秒）。建議避免同時開多個重負載工作。"
+    } else if waited >= 1 {
+        out["systemMessage"] = "\(note)：剛才降頻中，已等待 \(Int(waited)) 秒\(v.wait ? "仍未恢復，先放行" : "已恢復")。"
     }
     if let d = try? JSONSerialization.data(withJSONObject: out), let str = String(data: d, encoding: .utf8) {
         print(str)
@@ -259,12 +282,16 @@ func runGuard(config initial: Config, dryRun: Bool, interval: Double) throws {
     var config = initial
     var configMtime = Config.mtime(config.loadedFrom)
     Event.prepareDir()
+    // 硬體頻率與 thermal pressure：root 才讀得到（powermetrics）
+    let freq = FreqReader(interval: interval)
+    if FreqReader.available { freq.ensureRunning() } else { log("powermetrics 不可用（非 root 或找不到），不顯示頻率") }
 
     // 收到終止訊號時把風扇交還 SMC
     var stopping = false
     let restore = {
         if !dryRun { for i in 0..<fanCount { try? SMC.setFanAuto(i) } }
     }
+    defer { freq.stop() }
     for sig in [SIGINT, SIGTERM, SIGHUP] {
         signal(sig, SIG_IGN)
         let src = DispatchSource.makeSignalSource(signal: sig, queue: .main)
@@ -278,6 +305,8 @@ func runGuard(config initial: Config, dryRun: Bool, interval: Double) throws {
     var auto = true              // 目前是否交還 SMC 自動
     var smoothed: Double? = nil  // 控制溫度 EMA（升溫快、降溫慢）
     var lastLevel: Level? = nil
+    var wasThrottling = false
+    var lastFreqError: String? = nil
     var faultStreak = 0          // 連續感測器故障輪數
     var boostUntil: Date? = nil
     var boostRPM: Double = 0
@@ -319,7 +348,7 @@ func runGuard(config initial: Config, dryRun: Bool, interval: Double) throws {
 
         // 跨日歸零
         if stats.date != Snapshot.Stats.today() {
-            log("今日統計結算：最高 \(Int(stats.maxTemp))°C，hot \(Int(stats.hotSeconds))s，critical \(Int(stats.criticalSeconds))s，hook 等待 \(stats.hookWaits) 次、擋下 \(stats.hookDenies) 次，預熱 \(stats.boosts) 次")
+            log("今日統計結算：最高 \(Int(stats.maxTemp))°C，hot \(Int(stats.hotSeconds))s，critical \(Int(stats.criticalSeconds))s，hook 等待 \(stats.hookWaits) 次、擋下 \(stats.hookDenies) 次，預熱 \(stats.boosts) 次，降頻 \(Int(stats.throttleSeconds))s")
             stats = Snapshot.Stats(date: Snapshot.Stats.today())
         }
 
@@ -379,6 +408,18 @@ func runGuard(config initial: Config, dryRun: Bool, interval: Double) throws {
         case .ok: break
         }
         stats.maxTemp = max(stats.maxTemp, s.controlTemp)
+        freq.ensureRunning()
+        if let e = freq.lastError, e != lastFreqError { log("⚠️ \(e)"); lastFreqError = e }
+        if freq.fresh {
+            s.pcoreMHz = freq.pcoreMHz; s.ecoreMHz = freq.ecoreMHz; s.thermalPressure = freq.pressure
+            if s.throttling {
+                stats.throttleSeconds += interval
+                if !wasThrottling { log("⚠️ 熱降頻開始：pressure \(freq.pressure ?? "?")，P-core \(Int(freq.pcoreMHz ?? 0)) MHz（\(s.short)）") }
+            } else if wasThrottling {
+                log("熱降頻結束：P-core \(Int(freq.pcoreMHz ?? 0)) MHz（\(s.short)）")
+            }
+            wasThrottling = s.throttling
+        }
         if s.level != lastLevel, let last = lastLevel {
             log("等級 \(last.rawValue) → \(s.level.rawValue)（\(s.short)）")
         }
@@ -391,7 +432,7 @@ func runGuard(config initial: Config, dryRun: Bool, interval: Double) throws {
         s.stats = stats
         s.save()
 
-        history.append(HistoryPoint(time: s.time, cpu: s.cpuMax, gpu: s.gpuMax, rpm: s.fans.first?.rpm ?? 0, target: auto ? nil : lastTarget))
+        history.append(HistoryPoint(time: s.time, cpu: s.cpuMax, gpu: s.gpuMax, rpm: s.fans.first?.rpm ?? 0, target: auto ? nil : lastTarget, pMHz: s.pcoreMHz))
         history.removeAll { Date().timeIntervalSince($0.time) > History.keep }
         History.save(history)
 
@@ -442,6 +483,9 @@ func runDoctor(config: Config) -> Bool {
         check(!s.guardRunning || f.manual || s.guardTargetRPM == nil, "風扇控制權", f.manual ? "手動（guard 控制中）" : "自動", warnOnly: true)
     }
     check(FileManager.default.fileExists(atPath: "/Library/LaunchDaemons/com.cool91.guard.plist"), "LaunchDaemon", "/Library/LaunchDaemons/com.cool91.guard.plist")
+    if let saved = Snapshot.load(), saved.guardRunning {
+        check(saved.pcoreMHz != nil, "CPU 頻率（powermetrics）", saved.pcoreMHz.map { String(format: "P-core %.0f MHz，pressure %@", $0, saved.thermalPressure ?? "?") } ?? "快照裡沒有（guard 剛啟動或 powermetrics 失敗）", warnOnly: true)
+    }
 
     // 4. hook
     let settingsPath = NSString(string: "~/.claude/settings.json").expandingTildeInPath

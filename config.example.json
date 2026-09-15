@@ -15,7 +15,7 @@
   "maxRampDown": 300,
   "includeGPU": true,
   "warmTemp": 80,
-  "hotTemp": 90,
+  "hotTemp": 95,
   "criticalTemp": 100,
   "hookWaitSeconds": 90,
   "hookBlockOnCritical": true,

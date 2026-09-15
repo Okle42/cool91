@@ -18,6 +18,11 @@ public struct Snapshot: Codable {
     public var guardMode: String? = nil
     /// 預熱到期時間（有在預熱才有）
     public var boostUntil: Date? = nil
+    /// CPU 硬體實際頻率（guard 以 root 從 powermetrics 讀，非 root 拿不到）。P-core 掉到滿載值以下且 pressure 非 Nominal = 熱降頻
+    public var pcoreMHz: Double? = nil
+    public var ecoreMHz: Double? = nil
+    /// powermetrics 的 thermal pressure：Nominal / Moderate / Heavy / Trapping / Sleeping
+    public var thermalPressure: String? = nil
     /// 今日統計（guard 累計）
     public var stats: Stats? = nil
 
@@ -44,6 +49,7 @@ public struct Snapshot: Codable {
         public var hookDenies: Int = 0    // hook 因 critical 擋下的次數
         public var boosts: Int = 0        // 預熱觸發次數
         public var sensorFaults: Int = 0  // 感測器讀取失敗的輪數
+        public var throttleSeconds: Double = 0  // thermal pressure 非 Nominal 的累計秒數
 
         public init(date: String) { self.date = date }
         public static func today() -> String {
@@ -54,7 +60,8 @@ public struct Snapshot: Codable {
 
     /// 手動解碼：新加的欄位缺席時用預設值，舊版 guard 寫的快照也讀得懂
     enum CodingKeys: String, CodingKey {
-        case time, cpuMax, cpuAvg, gpuMax, controlTemp, ssd, fans, level, sensorOK, guardRunning, guardTargetRPM, guardMode, boostUntil, stats
+        case time, cpuMax, cpuAvg, gpuMax, controlTemp, ssd, fans, level, sensorOK, guardRunning, guardTargetRPM, guardMode, boostUntil, stats,
+             pcoreMHz, ecoreMHz, thermalPressure
     }
     public init(from d: Decoder) throws {
         let c = try d.container(keyedBy: CodingKeys.self)
@@ -72,6 +79,9 @@ public struct Snapshot: Codable {
         guardMode = try c.decodeIfPresent(String.self, forKey: .guardMode)
         boostUntil = try c.decodeIfPresent(Date.self, forKey: .boostUntil)
         stats = try c.decodeIfPresent(Stats.self, forKey: .stats)
+        pcoreMHz = try c.decodeIfPresent(Double.self, forKey: .pcoreMHz)
+        ecoreMHz = try c.decodeIfPresent(Double.self, forKey: .ecoreMHz)
+        thermalPressure = try c.decodeIfPresent(String.self, forKey: .thermalPressure)
     }
     public init(time: Date, cpuMax: Double, cpuAvg: Double, gpuMax: Double, ssd: Double?, fans: [FanState], level: Level, guardRunning: Bool, guardTargetRPM: Double?) {
         self.time = time; self.cpuMax = cpuMax; self.cpuAvg = cpuAvg; self.gpuMax = gpuMax; self.ssd = ssd
@@ -115,6 +125,9 @@ public struct Snapshot: Codable {
         snap.guardMode = alive ? saved?.guardMode : nil
         snap.boostUntil = alive ? saved?.boostUntil : nil
         snap.stats = alive ? saved?.stats : nil
+        snap.pcoreMHz = alive ? saved?.pcoreMHz : nil
+        snap.ecoreMHz = alive ? saved?.ecoreMHz : nil
+        snap.thermalPressure = alive ? saved?.thermalPressure : nil
         return snap
     }
 
@@ -153,14 +166,22 @@ public struct Snapshot: Codable {
 
     public var short: String {
         let fan = fans.first.map { String(format: "%.0f", $0.rpm) } ?? "-"
-        return String(format: "%@ %.0f°C 🌀%@rpm", level.emoji, controlTemp, fan)
+        var s = String(format: "%@ %.0f°C 🌀%@rpm", level.emoji, controlTemp, fan)
+        if let p = pcoreMHz { s += String(format: " ⚡%.2fGHz", p / 1000) }
+        if let t = thermalPressure, t != "Nominal" { s += " 降頻(\(t))" }
+        return s
     }
+    /// 是否正被熱降頻（powermetrics 的 pressure 非 Nominal）
+    public var throttling: Bool { thermalPressure.map { $0 != "Nominal" } ?? false }
 
     public var pretty: String {
         var s = "\(level.emoji) 等級: \(level.rawValue)\n"
         s += String(format: "CPU  最高 %.1f°C  平均 %.1f°C\n", cpuMax, cpuAvg)
         s += String(format: "GPU  最高 %.1f°C\n", gpuMax)
         if let ssd { s += String(format: "SSD  %.1f°C\n", ssd) }
+        if let p = pcoreMHz {
+            s += String(format: "頻率 P-core %.2f GHz  E-core %.2f GHz  熱壓力 %@%@\n", p / 1000, (ecoreMHz ?? 0) / 1000, thermalPressure ?? "?", throttling ? "（降頻中）" : "")
+        }
         if !sensorOK { s += "⚠️ 感測器讀取不完整\n" }
         for f in fans {
             s += String(format: "風扇%d  %.0f rpm  目標 %.0f  範圍 %.0f–%.0f  %@\n",
@@ -173,6 +194,7 @@ public struct Snapshot: Codable {
                 s += String(format: "\n今日 %@：最高 %.0f°C，warm %@，hot %@，critical %@；hook 等待 %d 次、擋下 %d 次；預熱 %d 次",
                             st.date, st.maxTemp, Snapshot.hms(st.warmSeconds), Snapshot.hms(st.hotSeconds), Snapshot.hms(st.criticalSeconds),
                             st.hookWaits, st.hookDenies, st.boosts)
+                if st.throttleSeconds > 0 { s += "；降頻 \(Snapshot.hms(st.throttleSeconds))" }
                 if st.sensorFaults > 0 { s += "；感測器故障 \(st.sensorFaults) 輪" }
             }
         } else {
@@ -198,8 +220,9 @@ public struct HistoryPoint: Codable {
     public var gpu: Double
     public var rpm: Double
     public var target: Double?
-    public init(time: Date, cpu: Double, gpu: Double, rpm: Double, target: Double?) {
-        self.time = time; self.cpu = cpu; self.gpu = gpu; self.rpm = rpm; self.target = target
+    public var pMHz: Double? = nil
+    public init(time: Date, cpu: Double, gpu: Double, rpm: Double, target: Double?, pMHz: Double? = nil) {
+        self.time = time; self.cpu = cpu; self.gpu = gpu; self.rpm = rpm; self.target = target; self.pMHz = pMHz
     }
 }
 

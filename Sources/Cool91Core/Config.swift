@@ -31,7 +31,7 @@ public struct Config: Codable {
     public var includeGPU: Bool = true
     /// 把關門檻（以控制溫度為準）
     public var warmTemp: Double = 80
-    public var hotTemp: Double = 90
+    public var hotTemp: Double = 95
     public var criticalTemp: Double = 100
     /// hook 在 hot 時最多等待幾秒降溫（程式內再夾在 hookWaitCap 以下，避免超過 Claude Code 的 hook timeout）
     public var hookWaitSeconds: Double = 90

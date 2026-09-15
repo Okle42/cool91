@@ -150,6 +150,7 @@ struct PanelView: View {
                 fanRow(s)
                 tempChart
                 fanChart
+                if s.pcoreMHz != nil { freqChart }
                 statsRow(s)
                 controls(s)
                 footer
@@ -172,6 +173,11 @@ struct PanelView: View {
                 .background(s.level.color.opacity(0.25))
                 .foregroundStyle(s.level.color)
                 .clipShape(Capsule())
+            if s.throttling {
+                Text("降頻中").font(.caption.bold())
+                    .padding(.horizontal, 8).padding(.vertical, 3)
+                    .background(Color.red.opacity(0.25)).foregroundStyle(.red).clipShape(Capsule())
+            }
             if let b = s.boostUntil, b > Date() {
                 Text("預熱 \(Int(b.timeIntervalSinceNow))s").font(.caption)
                     .padding(.horizontal, 8).padding(.vertical, 3)
@@ -186,21 +192,27 @@ struct PanelView: View {
     }
 
     func tiles(_ s: Snapshot) -> some View {
-        HStack(spacing: 8) {
-            tile("CPU", s.cpuMax, sub: String(format: "avg %.0f°", s.cpuAvg), color: s.level.color)
-            tile("GPU", s.gpuMax, sub: "最高", color: .blue)
-            tile("SSD", s.ssd ?? 0, sub: "", color: .teal)
+        HStack(spacing: 6) {
+            tile("CPU", String(format: "%.0f°", s.cpuMax), sub: String(format: "avg %.0f°", s.cpuAvg), color: s.level.color)
+            tile("GPU", String(format: "%.0f°", s.gpuMax), sub: "最高", color: .blue)
+            tile("SSD", String(format: "%.0f°", s.ssd ?? 0), sub: "", color: .teal)
+            if let p = s.pcoreMHz {
+                // P-core 硬體頻率：M4 滿載正常 3.9–4.4，掉到 3.8 以下且 pressure 非 Nominal = 熱降頻
+                tile("P-core", String(format: "%.2f", p / 1000),
+                     sub: s.throttling ? "降頻 " + (s.thermalPressure ?? "") : String(format: "GHz · E %.1f", (s.ecoreMHz ?? 0) / 1000),
+                     color: s.throttling ? .red : .purple)
+            }
         }
     }
 
-    func tile(_ name: String, _ v: Double, sub: String, color: Color) -> some View {
+    func tile(_ name: String, _ v: String, sub: String, color: Color) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(name).font(.caption).foregroundStyle(.secondary)
-            Text(String(format: "%.0f°", v)).font(.system(size: 22, weight: .semibold, design: .rounded)).foregroundStyle(color)
-            Text(sub).font(.caption2).foregroundStyle(.secondary)
+            Text(v).font(.system(size: 20, weight: .semibold, design: .rounded)).foregroundStyle(color).lineLimit(1).minimumScaleFactor(0.7)
+            Text(sub).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(8)
+        .padding(6)
         .background(Color.secondary.opacity(0.08))
         .clipShape(RoundedRectangle(cornerRadius: 8))
     }
@@ -259,6 +271,18 @@ struct PanelView: View {
         }
     }
 
+    var freqChart: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("P-core 頻率（GHz）").font(.caption).foregroundStyle(.secondary)
+            Chart(monitor.history.filter { $0.pMHz != nil }, id: \.time) { p in
+                LineMark(x: .value("t", p.time), y: .value("GHz", (p.pMHz ?? 0) / 1000), series: .value("s", "p")).foregroundStyle(.purple)
+            }
+            .chartYScale(domain: 0.9...4.5)
+            .chartXAxis(.hidden)
+            .frame(height: 50)
+        }
+    }
+
     @ViewBuilder
     func statsRow(_ s: Snapshot) -> some View {
         if let st = s.stats {
@@ -266,8 +290,8 @@ struct PanelView: View {
                 stat("今日最高", String(format: "%.0f°", st.maxTemp), color: monitor.config.level(for: st.maxTemp).color)
                 stat("hot", hms(st.hotSeconds), color: st.hotSeconds > 0 ? .orange : .secondary)
                 stat("critical", hms(st.criticalSeconds), color: st.criticalSeconds > 0 ? .red : .secondary)
+                stat("降頻", hms(st.throttleSeconds), color: st.throttleSeconds > 0 ? .red : .secondary)
                 stat("hook 等/擋", "\(st.hookWaits)/\(st.hookDenies)", color: .secondary)
-                stat("預熱", "\(st.boosts)", color: .secondary)
             }
             .font(.caption2)
         }

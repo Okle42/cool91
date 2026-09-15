@@ -34,8 +34,9 @@ Mac mini M4 的預設風扇策略極度保守 —— **CPU 已經 100°C，風�
 | **重指令預熱** | ✅ Claude 要跑 `swift build`/`blender`/`ffmpeg`… 前先把風扇拉起來 | ❌ |
 | 每日統計 | ✅ hot / critical 秒數、hook 等待與擋下次數、最高溫 | ❌ |
 | 選單列顯示溫度 | ✅ `🟡 82°`，點開有 5 分鐘曲線圖 | ✅ |
+| **CPU 硬體頻率 / 熱降頻偵測** | ✅ P-core GHz、thermal pressure，降頻時面板/statusline 標紅、log 記錄 | ❌ |
 | CLI / 腳本可查詢 | ✅ `cool91 check` 回 exit code 0/1/2 | ❌ |
-| **AI agent 把關** | ✅ Claude Code PreToolUse hook：hot 等降溫、critical 擋下 | ❌ |
+| **AI agent 把關** | ✅ Claude Code PreToolUse hook：**真的降頻才等**，溫度高但沒降頻照跑 | ❌ |
 | 常駐負載 | **0.1% CPU / 8 MB**（實測） | 數十 MB |
 | 外部依賴 | **0**（純 Swift + 80 行 C，SwiftPM 直接 build） | 閉源 |
 | 設定改了要重啟？ | ❌ 存檔即熱重載 | — |
@@ -55,7 +56,8 @@ Sources/Cool91Core    Swift library：型別解碼、感測器掃描、風扇曲
    │
    ├─► cool91 (CLI)
    │     ├─ guard   root LaunchDaemon，每 5 秒依曲線寫 F0Tg/F0Md
-   │     │          寫 /tmp/cool91.json（快照＋今日統計）、/tmp/cool91.history.json（5 分鐘曲線）
+   │     │          常駐一個 powermetrics 子行程讀 P/E-core 硬體頻率與 thermal pressure（+0.18% CPU）
+   │     │          寫 /tmp/cool91.json（快照＋頻率＋今日統計）、/tmp/cool91.history.json（5 分鐘曲線）
    │     │          收 /tmp/cool91.events/ 裡的事件（預熱、hook 統計），log 到 /var/log/cool91.log
    │     ├─ hook    Claude Code PreToolUse(Bash) 入口 —— 只讀快照檔，≈0 成本；重指令丟預熱事件
    │     └─ status / check / wait / fan / sensors / chip / doctor
@@ -69,14 +71,20 @@ Sources/Cool91Core    Swift library：型別解碼、感測器掃描、風扇曲
 
 ## 把關邏輯（Claude Code hook）
 
-以控制溫度（CPU 與 GPU 最高值）為準，每次 Claude 要執行 Bash 前：
+原則：**讓機器全力開工，風扇負責避免降頻；只有真的降頻了才讓工作等。** 溫度高不是問題，降頻才是。
 
-| 等級 | 門檻 | hook 行為 |
-|---|---|---|
-| 🟢 ok | < 80°C | 放行；指令含 `swift build`/`xcodebuild`/`blender`/`ffmpeg`… 就先發預熱事件（3000 rpm 撐 2 分鐘） |
-| 🟡 warm | 80–90 | 同上 |
-| 🟠 hot | 90–100 | **先等降到 90 以下（最多 90 秒）再放行**，附警告訊息 |
-| 🔴 critical | ≥ 100 | **擋下（deny）並說明原因**；可在 config 關掉 |
+guard 以 root 從 `powermetrics` 讀到 thermal pressure，hook 就看它：
+
+| thermal pressure | hook 行為 |
+|---|---|
+| Nominal | 放行，不管幾度；指令含 `swift build`/`xcodebuild`/`blender`/`ffmpeg`… 就先發預熱事件 |
+| Moderate / Heavy | **等它回 Nominal（最多 90 秒）再放行**，附說明 |
+| Trapping / Sleeping | **擋下（deny）**；可在 config 關掉 |
+| 溫度 ≥ critical（100°C） | 不管 pressure 都擋（安全底線） |
+
+guard 沒跑、拿不到 pressure 時退回溫度門檻：≥ 95°C 等、≥ 100°C 擋。
+
+第一版是純溫度門檻（90°C 就等），結果換成省風扇的曲線後重載穩態 87–93°C，每個 Bash 前都在等 —— 拿工作進度換一個沒有意義的溫度數字。改成看 pressure 之後，同樣 90°C 但 P-core 3.94 GHz、Nominal，直接放行。
 
 **白名單指令不受限**：`cool91`、`kill`、`pkill`、`killall`、`ps`、`top`、`sleep`… 在 critical 也放行，否則 Claude 連降溫的指令都跑不了。清單在 config `hookAllowCommands`。
 
@@ -131,7 +139,10 @@ Claude Code hook 預設 60 秒逾時，而 hot 等待上限是 90 秒 —— hoo
 **11. 面板閒著也在畫圖**
 `MenuBarExtra(.window)` 的內容 view 不會 disappear，`onAppear` 判斷不了選單有沒有打開；`NSStatusBarWindow` 又永遠 `isVisible`。要看的是 `MenuBarExtraWindow` 的 `isVisible`。閒置時只讀快照更新標題，歷史曲線由 guard 寫檔、面板打開才讀，從 1.5% / 80 MB 降到 0.2% / 33 MB。
 
-**12. main.swift 頂層變數的初始化順序**
+**12. CPU 硬體頻率在 M4 上只有 root 讀得到**
+想顯示「有沒有被降頻」。先試 IOReport 私有框架（macmon / asitop 用的，不需 root）：`CPU Core Performance States`、`CPU Complex Performance States`、`Voltage States`、`Core Performance Level` 全試過，和 `powermetrics` 同步對照後發現它們都是**軟體請求的 DVFS 檔位**，重載時永遠停在最高檔 `V19P0`（4464），而硬體實際在功率/熱限制後跑 3936 —— 降頻正是發生在這一層，IOReport 看不到。硬體計數器只有 `powermetrics` 讀得到且要 root。guard 本來就是 root，就讓它常駐一個 `powermetrics -i 5000` 子行程持續讀（初始化 0.8 秒 CPU 一次，之後每筆 0.18%）。注意 `-n 0` 不是無限，會在第一筆後退出，要不帶 `-n`。
+
+**13. main.swift 頂層變數的初始化順序**
 `main.swift` 的頂層 `let` 是依序執行的，`runGuard` 在 `switch` 裡被呼叫時，寫在後面的 `DateFormatter` 還沒建好，時間戳輸出空字串。放進 `enum` 用 `static let`（lazy）就好。
 
 ## 安裝
@@ -150,7 +161,7 @@ cd cool91
 
 ```bash
 cool91 status            # 溫度 / 風扇 / 等級 / guard 狀態 / 今日統計 / 預熱
-cool91 status --short    # 🟡 86°C 🌀3743rpm
+cool91 status --short    # 🟡 86°C 🌀3743rpm ⚡3.98GHz（降頻時多一個「降頻(Moderate)」）
 cool91 doctor            # 一次檢查 guard、快照、hook、設定檔、log 輪替、衝突程式
 cool91 check ; echo $?   # 0=ok/warm 1=hot 2=critical（給腳本判斷）
 cool91 wait --below 85   # 阻塞到 CPU 降到 85 以下
@@ -184,13 +195,13 @@ log：`/var/log/cool91.log`，帶時間戳，只記「寫了 SMC」「等級變�
 
 **風扇會不會操壞：**工業標準 L10 = 70,000 小時 @ 40°C，壽命 ∝ (額定 ÷ 實際轉速)^1.5；就算每天 8 小時滿速也是 24 年，風扇不是瓶頸，真正的代價只有噪音和灰塵。轉速上限是韌體回報的 `F0Mx`（M4 mini = 4900），Apple 自己在高環溫也會用到，不是超規格。真正傷風扇的是**頻繁啟停和劇烈變速**，這正是不對稱 EMA + 降速斜率限制 + deadband 在防的：降溫時每 5 秒最多降 300 rpm，從 4900 回到 1000 至少 65 秒。idle 時曲線最低點就是韌體最低轉速 1000，跟 Apple 自動一模一樣。
 
-**怎麼判斷曲線調得對不對：**看 `cool91 status` 的今日統計。目標是 critical = 0、hot 少、warm 出現在重載時是正常的。想確認有沒有降頻，`sudo powermetrics --samplers cpu_power,thermal -n 1` 看 `pressure level` 是不是 Nominal。
+**怎麼判斷曲線調得對不對：**看 `cool91 status` 的今日統計，關鍵一個數字：**降頻秒數應該是 0**。是 0 就代表風扇有做到它的事，溫度幾度不重要；不是 0 就把曲線高溫段拉高。
 
 **最壞情況：**guard 掛了，launchd `KeepAlive` 幾秒內重啟；正常退出一定先交還自動；連 SMC 手動模式都沒接管時，SoC 自己還有硬體熱保護（降頻、最後關機），不會燒壞。每年清一次灰塵就好。
 
 ### 接到 Claude Code 狀態列（選用）
 
-狀態列腳本讀 `/tmp/cool91.json` 顯示 `🌡85°🌀4896`，guard 沒在跑就自動隱藏。範例在 `extras/statusline_snippet.py`。
+狀態列腳本讀 `/tmp/cool91.json` 顯示 `🌡85°🌀4896⚡3.9G`（降頻時 ⚡ 變紅加 ↓），guard 沒在跑就自動隱藏。範例在 `extras/statusline_snippet.py`。
 
 ## 移植新晶片（M5 / M6 …）
 
