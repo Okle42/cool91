@@ -3,7 +3,7 @@
 import json, os
 path = os.path.expanduser("~/.claude/settings.json")
 settings = json.load(open(path)) if os.path.exists(path) else {}
-snippet = json.load(open(os.path.join(os.path.dirname(__file__), "hooks/claude-settings.snippet.json")))
+snippet = json.load(open(os.path.join(os.path.dirname(__file__), "..", "install", "claude-settings.snippet.json")))
 pre = settings.setdefault("hooks", {}).setdefault("PreToolUse", [])
 if any("cool91 hook" in h.get("command", "") for e in pre for h in e.get("hooks", [])):
     print("cool91 hook 已存在，略過")

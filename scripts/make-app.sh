@@ -1,7 +1,7 @@
 #!/bin/bash
 # 把 cool91-panel 打包成選單列 .app（LSUIElement，無 Dock 圖示），裝到 /Applications 並設開機啟動（使用者層級，不需 sudo）
 set -euo pipefail
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."
 APP="/Applications/cool91 Panel.app"
 BIN=".build/release/cool91-panel"
 [ -x "$BIN" ] || swift build -c release 2>&1 | tail -1

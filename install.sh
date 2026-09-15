@@ -15,20 +15,20 @@ fi
 
 echo "▶ 安裝 CLI、設定檔、guard LaunchDaemon（會跳出系統密碼視窗）"
 if [ "$(id -u)" = "0" ]; then
-  ./install-root.sh "$SRC" "${SUDO_USER:-$(id -un)}"
+  ./scripts/install-root.sh "$SRC" "${SUDO_USER:-$(id -un)}"
 elif sudo -n true 2>/dev/null; then
-  sudo ./install-root.sh "$SRC" "$(id -un)"
+  sudo ./scripts/install-root.sh "$SRC" "$(id -un)"
 else
-  osascript -e "do shell script \"'$SRC/install-root.sh' '$SRC' '$(id -un)'\" with administrator privileges with prompt \"cool91 需要管理員權限安裝風扇控制 daemon\""
+  osascript -e "do shell script \"'$SRC/scripts/install-root.sh' '$SRC' '$(id -un)'\" with administrator privileges with prompt \"cool91 需要管理員權限安裝風扇控制 daemon\""
 fi
 sleep 3
 /usr/local/bin/cool91 status
 
 echo "▶ Claude Code hook"
-./install-hook.py
+./scripts/install-hook.py
 
 echo "▶ 選單列面板"
-./make-app.sh
+./scripts/make-app.sh
 
 echo
 echo "✅ 全部完成。log：tail -f /var/log/cool91.log"

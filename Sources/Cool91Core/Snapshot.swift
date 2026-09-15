@@ -192,9 +192,9 @@ public struct Snapshot: Codable {
             if let b = boostUntil, b > Date() { s += String(format: "，預熱中（剩 %.0f 秒）", b.timeIntervalSinceNow) }
             if let st = stats {
                 s += String(format: "\n今日 %@：最高 %.0f°C，warm %@，hot %@，critical %@；hook 等待 %d 次、擋下 %d 次；預熱 %d 次",
-                            st.date, st.maxTemp, Snapshot.hms(st.warmSeconds), Snapshot.hms(st.hotSeconds), Snapshot.hms(st.criticalSeconds),
+                            st.date, st.maxTemp, Format.hms(st.warmSeconds), Format.hms(st.hotSeconds), Format.hms(st.criticalSeconds),
                             st.hookWaits, st.hookDenies, st.boosts)
-                if st.throttleSeconds > 0 { s += "；降頻 \(Snapshot.hms(st.throttleSeconds))" }
+                if st.throttleSeconds > 0 { s += "；降頻 \(Format.hms(st.throttleSeconds))" }
                 if st.sensorFaults > 0 { s += "；感測器故障 \(st.sensorFaults) 輪" }
             }
         } else {
@@ -203,12 +203,6 @@ public struct Snapshot: Codable {
         return s
     }
 
-    static func hms(_ sec: Double) -> String {
-        let s = Int(sec)
-        if s < 60 { return "\(s)s" }
-        if s < 3600 { return "\(s / 60)m\(s % 60)s" }
-        return "\(s / 3600)h\(s % 3600 / 60)m"
-    }
 }
 
 // MARK: - 歷史曲線（guard 寫、面板讀）

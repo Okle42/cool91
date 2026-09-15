@@ -1,0 +1,60 @@
+import XCTest
+@testable import Cool91Core
+
+final class ConfigTests: XCTestCase {
+    func testCurveInterpolation() {
+        var c = Config()
+        c.curve = [.init(temp: 60, rpm: 1000), .init(temp: 80, rpm: 3000)]
+        XCTAssertEqual(c.rpm(for: 50), 1000)      // 低於最低點 → 最低轉速
+        XCTAssertEqual(c.rpm(for: 70), 2000)      // 線性插值
+        XCTAssertEqual(c.rpm(for: 100), 3000)     // 高於最高點 → 最高轉速
+    }
+
+    func testCurveUnsortedInput() {
+        var c = Config()
+        c.curve = [.init(temp: 80, rpm: 3000), .init(temp: 60, rpm: 1000)]
+        XCTAssertEqual(c.rpm(for: 70), 2000)
+    }
+
+    func testLevels() {
+        let c = Config()   // warm 80 / hot 95 / critical 100
+        XCTAssertEqual(c.level(for: 79.9), .ok)
+        XCTAssertEqual(c.level(for: 80), .warm)
+        XCTAssertEqual(c.level(for: 95), .hot)
+        XCTAssertEqual(c.level(for: 100), .critical)
+        XCTAssertTrue(Level.ok < Level.warm && Level.warm < Level.hot && Level.hot < Level.critical)
+    }
+
+    func testDecodeMissingKeysUsesDefaults() throws {
+        let c = try JSONDecoder().decode(Config.self, from: Data(#"{"mode":"fixed"}"#.utf8))
+        XCTAssertEqual(c.mode, "fixed")
+        XCTAssertEqual(c.interval, Config().interval)
+        XCTAssertEqual(c.curve.count, Config().curve.count)
+    }
+
+    func testDecodeIgnoresUnknownKeys() throws {
+        // 舊版的 smoothing 欄位已移除，還在檔案裡不該讓解析失敗
+        let c = try JSONDecoder().decode(Config.self, from: Data(#"{"smoothing":0.5}"#.utf8))
+        XCTAssertEqual(c.smoothingUp, 0.7)
+    }
+
+    func testValidateRejectsBadThresholds() {
+        XCTAssertThrowsError(try JSONDecoder().decode(Config.self, from: Data(#"{"warmTemp":95,"hotTemp":90}"#.utf8)))
+        XCTAssertThrowsError(try JSONDecoder().decode(Config.self, from: Data(#"{"mode":"turbo"}"#.utf8)))
+        XCTAssertThrowsError(try JSONDecoder().decode(Config.self, from: Data(#"{"curve":[]}"#.utf8)))
+        XCTAssertThrowsError(try JSONDecoder().decode(Config.self, from: Data(#"{"smoothingUp":1.5}"#.utf8)))
+    }
+
+    func testLoadOrErrorThrowsOnCorruptFile() throws {
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("cool91-bad-\(UUID()).json")
+        try Data(#"{"mode":"fixed","fixedRPM":2000"#.utf8).write(to: tmp)   // 少一個 }
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        XCTAssertThrowsError(try Config.loadOrError(path: tmp.path))
+        XCTAssertEqual(Config.load(path: tmp.path).mode, "curve")            // load 退回預設
+    }
+
+    func testLoadOrErrorMissingFileReturnsDefault() throws {
+        let c = try Config.loadOrError(path: "/nonexistent/cool91.json")
+        XCTAssertNil(c.loadedFrom)
+    }
+}

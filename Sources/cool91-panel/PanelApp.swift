@@ -288,9 +288,9 @@ struct PanelView: View {
         if let st = s.stats {
             HStack(spacing: 10) {
                 stat("今日最高", String(format: "%.0f°", st.maxTemp), color: monitor.config.level(for: st.maxTemp).color)
-                stat("hot", hms(st.hotSeconds), color: st.hotSeconds > 0 ? .orange : .secondary)
-                stat("critical", hms(st.criticalSeconds), color: st.criticalSeconds > 0 ? .red : .secondary)
-                stat("降頻", hms(st.throttleSeconds), color: st.throttleSeconds > 0 ? .red : .secondary)
+                stat("hot", Format.hms(st.hotSeconds), color: st.hotSeconds > 0 ? .orange : .secondary)
+                stat("critical", Format.hms(st.criticalSeconds), color: st.criticalSeconds > 0 ? .red : .secondary)
+                stat("降頻", Format.hms(st.throttleSeconds), color: st.throttleSeconds > 0 ? .red : .secondary)
                 stat("hook 等/擋", "\(st.hookWaits)/\(st.hookDenies)", color: .secondary)
             }
             .font(.caption2)
@@ -303,13 +303,6 @@ struct PanelView: View {
             Text(name).foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity)
-    }
-
-    func hms(_ sec: Double) -> String {
-        let s = Int(sec)
-        if s < 60 { return "\(s)s" }
-        if s < 3600 { return "\(s / 60)m" }
-        return String(format: "%.1fh", sec / 3600)
     }
 
     @ViewBuilder

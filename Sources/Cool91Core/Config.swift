@@ -39,7 +39,7 @@ public struct Config: Codable {
     /// hook 在 critical 時是否直接擋下工具呼叫
     public var hookBlockOnCritical: Bool = true
     /// critical 時仍放行的指令（降溫、查狀態用）。比對每段指令的第一個 token 的檔名
-    public var hookAllowCommands: [String] = ["cool91", "kill", "pkill", "killall", "pgrep", "ps", "top", "sleep", "cat", "tail", "echo", "launchctl"]
+    public var hookAllowCommands: [String] = ["cool91", "kill", "pkill", "killall", "pgrep", "ps", "top", "sleep", "cat", "tail", "grep", "echo", "launchctl"]
     /// 預熱：Bash 指令含這些關鍵字時，先把風扇拉到 boostRPM 撐 boostSeconds 秒（之後仍由曲線接管，取較大者）
     public var boostCommands: [String] = ["swift build", "xcodebuild", "cmake", "ninja", "cargo build", "cargo test", "blender", "ffmpeg", "clang", "gcc", "rustc", "go build", "npm run build", "pytest", "make "]
     public var boostRPM: Double = 3000

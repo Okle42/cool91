@@ -53,14 +53,7 @@ public final class FreqReader {
         buffer += chunk
         var lines = buffer.components(separatedBy: "\n")
         buffer = lines.removeLast()   // 最後一段可能不完整
-        var p: Double? = nil, e: Double? = nil, pr: String? = nil
-        for line in lines {
-            if let v = FreqReader.value(after: "P-Cluster HW active frequency:", in: line) { p = v }
-            else if let v = FreqReader.value(after: "E-Cluster HW active frequency:", in: line) { e = v }
-            else if let r = line.range(of: "Current pressure level:") {
-                pr = line[r.upperBound...].trimmingCharacters(in: .whitespaces)
-            }
-        }
+        let (p, e, pr) = FreqReader.parse(lines: lines)
         if p != nil || e != nil || pr != nil {
             DispatchQueue.main.async {
                 if let p { self.pcoreMHz = p }
@@ -69,6 +62,19 @@ public final class FreqReader {
                 self.lastUpdate = Date()
             }
         }
+    }
+
+    /// 從 powermetrics 文字輸出抓 P/E-cluster 頻率與 pressure（每個都取最後一次出現的值）
+    public static func parse(lines: [String]) -> (p: Double?, e: Double?, pressure: String?) {
+        var p: Double? = nil, e: Double? = nil, pr: String? = nil
+        for line in lines {
+            if let v = value(after: "P-Cluster HW active frequency:", in: line) { p = v }
+            else if let v = value(after: "E-Cluster HW active frequency:", in: line) { e = v }
+            else if let r = line.range(of: "Current pressure level:") {
+                pr = line[r.upperBound...].trimmingCharacters(in: .whitespaces)
+            }
+        }
+        return (p, e, pr)
     }
 
     private static func value(after key: String, in line: String) -> Double? {

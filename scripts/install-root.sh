@@ -12,8 +12,8 @@ mv -f /usr/local/bin/cool91.new /usr/local/bin/cool91
 # 設定檔交給使用者可寫，面板才能改模式/曲線；guard 偵測到修改會自動重載
 chown "$USER_NAME" /etc/cool91/config.json
 # log 輪替
-cp "$SRC/launchd/newsyslog-cool91.conf" /etc/newsyslog.d/cool91.conf
-cp "$SRC/launchd/com.cool91.guard.plist" /Library/LaunchDaemons/
+cp "$SRC/install/newsyslog-cool91.conf" /etc/newsyslog.d/cool91.conf
+cp "$SRC/install/com.cool91.guard.plist" /Library/LaunchDaemons/
 chown root:wheel /Library/LaunchDaemons/com.cool91.guard.plist
 # bootout 後 guard 要先把風扇交還再退出，launchd 還沒清完就 bootstrap 會回 5 (I/O error)，等它真的消失再裝
 launchctl bootout system/com.cool91.guard 2>/dev/null || true

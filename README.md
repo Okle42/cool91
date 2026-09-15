@@ -211,6 +211,22 @@ Claude Code hook 預設 60 秒逾時，而等待上限是 90 秒 —— hook 設
 4. 若風扇 key 不再是 `F0Ac/F0Tg/F0Md`，改 `Sources/Cool91Core/SMC.swift` 的 `fan(_:)` / `setFan`
 5. `powermetrics` 輸出格式若變，改 `Sources/Cool91Core/FreqReader.swift` 的解析
 
+## 專案結構
+
+```
+Sources/CSMC/           80 行 C：AppleSMC open / read / write / 列舉 key
+Sources/Cool91Core/     SMC 解碼、Config、Snapshot / History / Event、FreqReader（powermetrics）、Policy（把關判斷）
+Sources/cool91/         CLI：main（分派）、Hook、Guard、Doctor
+Sources/cool91-panel/   選單列面板（SwiftUI + Charts）
+Tests/Cool91CoreTests/  單元測試：曲線插值、門檻、設定解析與驗證、白名單、預熱、把關判斷、舊快照相容、powermetrics 解析
+install/                LaunchDaemon plist、newsyslog 設定、Claude Code hook 片段
+scripts/                install-root.sh（root 步驟）、install-hook.py、make-app.sh（打包面板）
+extras/                 statusline 片段
+docs/                   A/B 實測資料
+```
+
+`swift test` 跑單元測試；`./install.sh` 一鍵安裝。
+
 ## 文件
 
 - [`docs/ab-test-2026-09-16/`](docs/ab-test-2026-09-16/) — 曲線 A/B 實測原始資料、powermetrics 輸出、外部參考資料

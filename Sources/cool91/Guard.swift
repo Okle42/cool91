@@ -1,0 +1,202 @@
+import Foundation
+import Cool91Core
+
+// MARK: - guard
+
+/// guard 的 log：root 時自己 append 到 /var/log/cool91.log（帶時間戳；newsyslog 輪替後自然寫到新檔），否則走 stderr
+// （放在 enum 裡用 static：main.swift 的頂層 let 是依序初始化的，runGuard 被呼叫時它們還沒建好）
+enum GuardLog {
+    static let path = "/var/log/cool91.log"
+    static let stamp: DateFormatter = { let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd HH:mm:ss"; f.locale = Locale(identifier: "en_US_POSIX"); return f }()
+}
+func guardLog(_ m: String, toFile: Bool) {
+    let line = "\(GuardLog.stamp.string(from: Date())) \(m)\n"
+    if toFile, let d = line.data(using: .utf8) {
+        if !FileManager.default.fileExists(atPath: GuardLog.path) {
+            FileManager.default.createFile(atPath: GuardLog.path, contents: nil, attributes: [.posixPermissions: 0o644])
+        }
+        if let fh = FileHandle(forWritingAtPath: GuardLog.path) {
+            fh.seekToEndOfFile(); fh.write(d); fh.closeFile()
+            return
+        }
+    }
+    FileHandle.standardError.write(line.data(using: .utf8)!)
+}
+
+/// 常駐控制迴圈（需 root 才能寫 SMC）。config 檔改動會自動重載（面板改模式/曲線即時生效）
+func runGuard(config initial: Config, dryRun: Bool, interval: Double) throws {
+    let isRoot = getuid() == 0
+    if !isRoot && !dryRun {
+        throw Cool91Error.usage("guard 需要 root 才能寫風扇（sudo cool91 guard），或加 --dry-run 只觀察")
+    }
+    func log(_ m: String) { guardLog(m, toFile: isRoot && !dryRun) }
+    if macsFanControlRunning() {
+        log("⚠️ Macs Fan Control 正在執行，兩者會互搶風扇控制；建議先退出它。")
+    }
+    let fanCount = SMC.fanCount
+    guard fanCount > 0 else { throw Cool91Error.smc("找不到風扇（FNum=0）") }
+
+    var config = initial
+    var configMtime = Config.mtime(config.loadedFrom)
+    Event.prepareDir()
+    // 硬體頻率與 thermal pressure：root 才讀得到（powermetrics）
+    let freq = FreqReader(interval: interval)
+    if FreqReader.available { freq.ensureRunning() } else { log("powermetrics 不可用（非 root 或找不到），不顯示頻率") }
+
+    // 收到終止訊號時把風扇交還 SMC
+    var stopping = false
+    let restore = {
+        if !dryRun { for i in 0..<fanCount { try? SMC.setFanAuto(i) } }
+    }
+    defer { freq.stop() }
+    for sig in [SIGINT, SIGTERM, SIGHUP] {
+        signal(sig, SIG_IGN)
+        let src = DispatchSource.makeSignalSource(signal: sig, queue: .main)
+        src.setEventHandler { stopping = true }
+        src.resume()
+        _ = Unmanaged.passRetained(src as AnyObject)
+    }
+
+    var lastTarget: Double = -1
+    var forceWrite = false       // 設定重載後這輪不管 deadband 一定寫
+    var auto = true              // 目前是否交還 SMC 自動
+    var smoothed: Double? = nil  // 控制溫度 EMA（升溫快、降溫慢）
+    var lastLevel: Level? = nil
+    var wasThrottling = false
+    var lastFreqError: String? = nil
+    var faultStreak = 0          // 連續感測器故障輪數
+    var boostUntil: Date? = nil
+    var boostRPM: Double = 0
+    // 今日統計：guard 重啟時從舊快照接續（同一天才算）
+    var stats = Snapshot.load()?.stats.flatMap { $0.date == Snapshot.Stats.today() ? $0 : nil } ?? Snapshot.Stats(date: Snapshot.Stats.today())
+    var history = History.load().filter { Date().timeIntervalSince($0.time) < History.keep }
+
+    log("cool91 guard 啟動（\(chipName())，\(fanCount) 顆風扇，每 \(interval)s，模式 \(config.mode)，GPU \(config.includeGPU ? "納入" : "不納入")，\(dryRun ? "dry-run" : "控制中")）")
+
+    while !stopping {
+        // 設定檔熱重載：解析失敗（含面板寫到一半）就保留舊設定，下一輪再試
+        if let m = Config.mtime(config.loadedFrom), m != configMtime {
+            do {
+                config = try Config.loadOrError(path: config.loadedFrom)
+                configMtime = m
+                forceWrite = true
+                log("設定已重載：模式 \(config.mode)，曲線 \(config.curve.map { "\(Int($0.temp))→\(Int($0.rpm))" }.joined(separator: " "))")
+            } catch {
+                log("⚠️ 設定檔解析失敗，保留舊設定：\(error)")
+            }
+        }
+
+        // 收 hook / 面板丟過來的事件
+        for e in Event.drain() {
+            switch e.kind {
+            case .boost:
+                let until = e.time.addingTimeInterval(e.seconds ?? config.boostSeconds)
+                if boostUntil == nil || until > boostUntil! { boostUntil = until }
+                boostRPM = max(boostRPM, e.rpm ?? config.boostRPM)
+                stats.boosts += 1
+                log("預熱 \(Int(boostRPM)) rpm 到 \(GuardLog.stamp.string(from: boostUntil!))：\(e.note ?? "")")
+            case .hookWait: stats.hookWaits += 1
+            case .hookDeny: stats.hookDenies += 1
+            }
+        }
+        if let b = boostUntil, b <= Date() { boostUntil = nil; boostRPM = 0 }
+
+        var s = Snapshot.take(config: config)
+
+        // 跨日歸零
+        if stats.date != Snapshot.Stats.today() {
+            log("今日統計結算：最高 \(Int(stats.maxTemp))°C，hot \(Int(stats.hotSeconds))s，critical \(Int(stats.criticalSeconds))s，hook 等待 \(stats.hookWaits) 次、擋下 \(stats.hookDenies) 次，預熱 \(stats.boosts) 次，降頻 \(Int(stats.throttleSeconds))s")
+            stats = Snapshot.Stats(date: Snapshot.Stats.today())
+        }
+
+        if !s.sensorOK {
+            // 感測器讀不完整：這輪的溫度不可信，不動風扇；連續 6 輪（30 秒）就交還 SMC 自己管
+            faultStreak += 1; stats.sensorFaults += 1
+            if faultStreak == 1 || faultStreak % 12 == 0 { log("⚠️ 感測器讀取不完整（連續 \(faultStreak) 輪），保持目前風扇目標") }
+            if faultStreak >= 6 && !auto { restore(); auto = true; lastTarget = -1; log("⚠️ 感測器持續故障，風扇交還自動") }
+        } else {
+            faultStreak = 0
+            let t = s.controlTemp
+            if let prev = smoothed {
+                smoothed = prev + (t - prev) * (t > prev ? config.smoothingUp : config.smoothingDown)
+            } else { smoothed = t }
+            let fmin = s.fans.first?.min ?? 0
+            let fmax = s.fans.first?.max ?? 5000
+            let curveMin = config.curve.map(\.temp).min() ?? 0
+
+            // 決定目標：nil = 交還自動
+            var desired: Double? = nil
+            switch config.mode {
+            case "auto":
+                desired = nil
+            case "fixed":
+                desired = config.fixedRPM
+            default: // curve；低於曲線最低點 5°C 以上就交還自動讓 SMC 省電
+                desired = smoothed! < curveMin - 5 ? nil : config.rpm(for: smoothed!)
+            }
+            // 預熱：重指令剛開始、溫度還沒上來時先把風扇拉起來；auto 模式尊重使用者，不預熱
+            if let b = boostUntil, b > Date(), config.mode != "auto" {
+                desired = max(desired ?? 0, boostRPM)
+            }
+            // 任何來源的目標都夾在韌體回報的 F0Mn–F0Mx 之間，永遠不會超轉
+            var target = desired.map { min(max($0, fmin), fmax) }
+            // 降速斜率限制：升速不限，降速每輪最多降 maxRampDown
+            if let t = target, lastTarget >= 0, config.maxRampDown > 0, t < lastTarget - config.maxRampDown {
+                target = lastTarget - config.maxRampDown
+            }
+
+            if let target {
+                if abs(target - lastTarget) >= config.deadband || auto || forceWrite {
+                    if !dryRun { for i in 0..<fanCount { try SMC.setFan(i, rpm: target) } }
+                    lastTarget = target; auto = false; forceWrite = false
+                    log("\(s.short) → 目標 \(Int(target)) rpm")
+                }
+            } else if !auto {
+                restore(); auto = true; lastTarget = -1
+                log("\(s.short) → 交還自動")
+            }
+        }
+
+        // 統計
+        switch s.level {
+        case .warm: stats.warmSeconds += interval
+        case .hot: stats.hotSeconds += interval
+        case .critical: stats.criticalSeconds += interval
+        case .ok: break
+        }
+        stats.maxTemp = max(stats.maxTemp, s.controlTemp)
+        freq.ensureRunning()
+        if let e = freq.lastError, e != lastFreqError { log("⚠️ \(e)"); lastFreqError = e }
+        if freq.fresh {
+            s.pcoreMHz = freq.pcoreMHz; s.ecoreMHz = freq.ecoreMHz; s.thermalPressure = freq.pressure
+            if s.throttling {
+                stats.throttleSeconds += interval
+                if !wasThrottling { log("⚠️ 熱降頻開始：pressure \(freq.pressure ?? "?")，P-core \(Int(freq.pcoreMHz ?? 0)) MHz（\(s.short)）") }
+            } else if wasThrottling {
+                log("熱降頻結束：P-core \(Int(freq.pcoreMHz ?? 0)) MHz（\(s.short)）")
+            }
+            wasThrottling = s.throttling
+        }
+        if s.level != lastLevel, let last = lastLevel {
+            log("等級 \(last.rawValue) → \(s.level.rawValue)（\(s.short)）")
+        }
+        lastLevel = s.level
+
+        s.guardRunning = true
+        s.guardMode = config.mode
+        s.guardTargetRPM = auto ? nil : lastTarget
+        s.boostUntil = boostUntil
+        s.stats = stats
+        s.save()
+
+        history.append(HistoryPoint(time: s.time, cpu: s.cpuMax, gpu: s.gpuMax, rpm: s.fans.first?.rpm ?? 0, target: auto ? nil : lastTarget, pMHz: s.pcoreMHz))
+        history.removeAll { Date().timeIntervalSince($0.time) > History.keep }
+        History.save(history)
+
+        if dryRun { stderr("\(s.short) → \(auto ? "auto" : "\(Int(lastTarget)) rpm")") }
+        RunLoop.main.run(until: Date().addingTimeInterval(interval))
+    }
+    restore()
+    var s = Snapshot.take(config: config); s.guardRunning = false; s.stats = stats; s.save()
+    log("cool91 guard 結束，風扇已交還自動")
+}

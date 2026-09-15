@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.1 — 2026-09-16
+
+整頓，不改行為：
+
+- 把關判斷、白名單、預熱關鍵字、時間格式移進 `Cool91Core/Policy.swift`；`main.swift` 拆成 main / Hook / Guard / Doctor
+- 加 `Tests/Cool91CoreTests`（20 個測試）：曲線插值、門檻、設定解析與驗證、白名單、預熱、把關判斷、舊快照相容、powermetrics 解析
+- 腳本收進 `scripts/`，plist / newsyslog / hook 片段收進 `install/`
+- 白名單預設加 `grep`
+- 去重 `hms`
+
 ## 0.2 — 2026-09-16
 
 **把關原則改變：讓機器全力開工，風扇負責避免降頻，只有真的降頻才讓工作等。**
