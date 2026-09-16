@@ -273,6 +273,7 @@ struct PanelView: View {
             if !s.guardRunning { return ("exclamationmark.triangle.fill", "guard 沒在跑，風扇由 macOS 控制", Neon.amber) }
             if s.level == .critical { return ("flame.fill", String(format: "溫度 %.0f°C 已達 critical，hook 會擋下工作", s.controlTemp), Neon.red) }
             if s.throttling { return ("tortoise.fill", "降頻中（\(s.thermalPressure ?? "")）· hook 會讓工作等", Neon.red) }
+            if s.gpuThrottling { return ("tortoise.fill", String(format: "GPU 熱降頻中（CLTM %.0f%%）· hook 會讓工作等", s.gpuThrottlePercent ?? 0), Neon.red) }
             if s.pcoreMHz == nil { return ("questionmark.circle", "沒有頻率資料，改用溫度判斷（\(s.level.label)）", Neon.amber) }
             if (s.pcoreMHz ?? 0) < 100 { return ("moon.zzz.fill", "閒置 · 未降頻", Neon.green) }
             return ("bolt.fill", String(format: "全速運作 %.2f GHz · 未降頻", (s.pcoreMHz ?? 0) / 1000), Neon.green)
@@ -319,6 +320,7 @@ struct PanelView: View {
                 HStack(spacing: 4) {
                     legend("GPU", Neon.green); bigValue(String(format: "%.0f°", s.gpuMax), Neon.green)
                     if let a = s.gpuActive { Text(String(format: "%.0f%%", a)).font(.caption2).foregroundStyle(.secondary) }
+                    if s.gpuThrottling { chipLabel("降頻", Neon.red) }
                 }
                 if let ssd = s.ssd { Text(String(format: "SSD %.0f°", ssd)).font(.caption2).foregroundStyle(.secondary) }
             }

@@ -122,7 +122,7 @@ func runGuard(config initial: Config, dryRun: Bool, interval: Double) throws {
         if let b = boostUntil, b <= Date() { boostUntil = nil; boostRPM = 0 }
 
         var s = Snapshot.take(config: config)
-        if let g = gpuStats.sample() { s.gpuActive = g.active; s.gpuMHz = g.mhz }
+        if let g = gpuStats.sample() { s.gpuActive = g.active; s.gpuMHz = g.mhz; s.gpuThrottlePercent = gpuStats.cltmPercent }
         let top = procTop.sample(); if !top.isEmpty { s.topProcesses = top }
 
         // 跨日歸零
@@ -200,13 +200,14 @@ func runGuard(config initial: Config, dryRun: Bool, interval: Double) throws {
         if let e = freq.lastError, e != lastFreqError { log("⚠️ \(e)"); lastFreqError = e }
         if freq.fresh {
             s.pcoreMHz = freq.pcoreMHz; s.ecoreMHz = freq.ecoreMHz; s.thermalPressure = freq.pressure
-            if s.throttling {
+            let throttlingNow = s.throttling || s.gpuThrottling
+            if throttlingNow {
                 stats.throttleSeconds += interval
-                if !wasThrottling { log("⚠️ 熱降頻開始：pressure \(freq.pressure ?? "?")，P-core \(Int(freq.pcoreMHz ?? 0)) MHz（\(s.short)）") }
+                if !wasThrottling { log("⚠️ 熱降頻開始：pressure \(freq.pressure ?? "?")，P-core \(Int(freq.pcoreMHz ?? 0)) MHz，GPU CLTM \(Int(s.gpuThrottlePercent ?? 0))%（\(s.short)）") }
             } else if wasThrottling {
                 log("熱降頻結束：P-core \(Int(freq.pcoreMHz ?? 0)) MHz（\(s.short)）")
             }
-            wasThrottling = s.throttling
+            wasThrottling = throttlingNow
         }
         if s.level != lastLevel, let last = lastLevel {
             log("等級 \(last.rawValue) → \(s.level.rawValue)（\(s.short)）")

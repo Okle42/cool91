@@ -9,6 +9,7 @@ public enum Policy {
     ///   block = 嚴重到該擋下（Trapping / critical）
     public static func verdict(_ s: Snapshot, config: Config) -> (wait: Bool, block: Bool) {
         if s.level == .critical { return (true, config.hookBlockOnCritical) }
+        if s.gpuThrottling { return (true, false) }   // GPU 被熱管理壓檔位，跟 CPU Moderate 同等看待
         if let pr = s.thermalPressure {
             switch pr {
             case "Nominal": return (false, false)

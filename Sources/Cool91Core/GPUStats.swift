@@ -7,6 +7,8 @@ import IOKit
 public final class GPUStats {
     public private(set) var activePercent: Double? = nil
     public private(set) var mhz: Double? = nil
+    /// GPU 被熱管理（CLTM, closed-loop thermal management）限制檔位的時間比例（0–100）。> 5 就算 GPU 熱降頻
+    public private(set) var cltmPercent: Double? = nil
     private var lib: UnsafeMutableRawPointer? = nil
     private var sub: UnsafeMutableRawPointer? = nil
     private var subbed: Unmanaged<CFMutableDictionary>? = nil
@@ -15,6 +17,7 @@ public final class GPUStats {
     private var ok = false
 
     private typealias CopyChannelsInGroup = @convention(c) (CFString, CFString?, UInt64, UInt64, UInt64) -> CFMutableDictionary?
+    private typealias MergeChannels = @convention(c) (CFMutableDictionary, CFMutableDictionary, CFTypeRef?) -> Void
     private typealias CreateSubscription = @convention(c) (UnsafeMutableRawPointer?, CFMutableDictionary, UnsafeMutablePointer<Unmanaged<CFMutableDictionary>?>?, UInt64, CFTypeRef?) -> UnsafeMutableRawPointer?
     private typealias CreateSamples = @convention(c) (UnsafeMutableRawPointer, CFMutableDictionary, CFTypeRef?) -> CFDictionary?
     private typealias CreateSamplesDelta = @convention(c) (CFDictionary, CFDictionary, CFTypeRef?) -> CFDictionary?
@@ -22,6 +25,8 @@ public final class GPUStats {
     private typealias StateCount = @convention(c) (CFDictionary) -> Int32
     private typealias StateName = @convention(c) (CFDictionary, Int32) -> CFString?
     private typealias StateRes = @convention(c) (CFDictionary, Int32) -> Int64
+    private typealias GetName = @convention(c) (CFDictionary) -> CFString?
+    private var chanName: GetName? = nil
     private var createSamples: CreateSamples? = nil
     private var samplesDelta: CreateSamplesDelta? = nil
     private var iterate: Iterate? = nil
@@ -41,7 +46,13 @@ public final class GPUStats {
         stateCount = sym("IOReportStateGetCount", StateCount.self)
         stateName = sym("IOReportStateGetNameForIndex", StateName.self)
         stateRes = sym("IOReportStateGetResidency", StateRes.self)
+        chanName = sym("IOReportChannelGetChannelName", GetName.self)
         guard let chans = copy("GPU Stats" as CFString, "GPU Performance States" as CFString, 0, 0, 0) else { return }
+        // 一併訂閱 CLTM 通道（GPU 熱降頻證據），合併進同一個 subscription
+        if let merge = sym("IOReportMergeChannels", MergeChannels.self),
+           let cltm = copy("GPU Stats" as CFString, "CLTM-induced GPU Performance States" as CFString, 0, 0, 0) {
+            merge(chans, cltm, nil)
+        }
         sub = create(nil, chans, &subbed, 0, nil)
         freqs = GPUStats.freqTable()
         ok = sub != nil && createSamples != nil && samplesDelta != nil && iterate != nil
@@ -55,13 +66,20 @@ public final class GPUStats {
         defer { prev = cur }
         guard let prev, let delta = samplesDelta!(prev, cur, nil) else { return nil }
         var off = 0.0, total = 0.0, num = 0.0, den = 0.0
+        var cltmNo = 0.0, cltmTotal = 0.0
         let freqs = self.freqs
-        let sc = stateCount!, sn = stateName!, sr = stateRes!
+        let sc = stateCount!, sn = stateName!, sr = stateRes!, cnm = chanName
         iterate!(delta) { item in
             let n = sc(item)
+            let isCLTM = (cnm?(item) as String?) == "GPU_CLTM"
             for i in 0..<n {
                 let nm = sn(item, i) as String? ?? ""
                 let r = Double(sr(item, i))
+                if isCLTM {
+                    cltmTotal += r
+                    if nm == "NO_CLTM" { cltmNo += r }
+                    continue
+                }
                 total += r
                 if nm == "OFF" || nm == "IDLE" { off += r }
                 else if let pr = nm.range(of: "P", options: .backwards), let idx = Int(nm[pr.upperBound...]), idx < freqs.count {
@@ -73,6 +91,7 @@ public final class GPUStats {
         guard total > 0 else { return nil }
         activePercent = 100 * (1 - off / total)
         mhz = den > 0 ? num / den : 0
+        if cltmTotal > 0 { cltmPercent = 100 * (1 - cltmNo / cltmTotal) }
         return (activePercent!, mhz!)
     }
 

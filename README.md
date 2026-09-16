@@ -77,7 +77,7 @@ guard 以 root 從 `powermetrics` 讀到 thermal pressure，hook、`cool91 check
 | thermal pressure | hook 行為 | `check` exit |
 |---|---|---|
 | Nominal | 放行，不管幾度；指令開頭是 `swift build` / `xcodebuild` / `blender` / `ffmpeg`… 就先發預熱事件 | 0 |
-| Moderate / Heavy | **等它回 Nominal（最多 90 秒）再放行**，附說明 | 1 |
+| Moderate / Heavy，或 GPU 被 CLTM 壓檔位 > 5% | **等它恢復（最多 90 秒）再放行**，附說明 | 1 |
 | Trapping / Sleeping | **擋下（deny）**；可在 config 關掉 | 2 |
 | 溫度 ≥ critical（100°C） | 不管 pressure 都擋（安全底線） | 2 |
 
@@ -210,7 +210,7 @@ Claude Code hook 預設 60 秒逾時，而等待上限是 90 秒 —— hook 設
 第一版 LaunchDaemon 用 `ProcessType Background` + `Nice 10`，想說「常駐程式要低調」。結果 load 35 時 guard 啟動後卡了三分鐘還沒跑完第一輪：`sample` 看到 1375 次 SMC 列舉呼叫全部在 `mach_msg2_trap` 排隊，同時另一個一般 process 掃同樣的 key 只要 0.2 秒。Background QoS 在系統忙時幾乎拿不到 CPU，而風扇守門員最需要工作的時刻正是系統最忙的時刻 —— 這個設定剛好反了。改成 `Standard` + `Nice -5`（實際用量 0.1%，搶不到別人），同樣負載下啟動同一秒就完成第一輪。另外兩層防禦：guard 把掃到的 key 清單寫進快照，CLI / 面板 / 重啟後的 guard 直接用，不再每次列舉 1375 個 key；主迴圈加 watchdog thread，6 個週期沒心跳就 `_exit` 讓 launchd 重啟（卡在 kernel 呼叫時連 SIGTERM 都收不到，只能靠這個）。
 
 **16. 「現在誰在算」與 GPU 使用率，不靠 powermetrics**
-`powermetrics --samplers tasks` 每個 process 的 CPU 很準但常駐要 +2.7% CPU，而且它的 per-process GPU 時間在 Apple Silicon 全是 0；`gpu_power` sampler 也要 +2.1%。改成：CPU 用 `libproc` 差分每個 process 的累計 CPU 時間（`proc_pidinfo PROC_PIDTASKINFO`，不需 root，每輪幾毫秒）—— 注意 `pti_total_user/system` 在 Apple Silicon 是 Mach tick（125/3 ns），Intel 剛好 1:1 所以文件都當它是 ns，不換算會少算 41 倍。GPU 用 IOReport `GPU Stats / GPU Performance States`：CPU 那邊 IOReport 是軟體檔位不可信，但 GPU 的「非 OFF 比例」就是使用率，狀態分布也和 powermetrics 對得上；頻率表在 pmgr `voltage-states9-sram`，單位 Hz（CPU 表是 kHz）。
+`powermetrics --samplers tasks` 每個 process 的 CPU 很準但常駐要 +2.7% CPU，而且它的 per-process GPU 時間在 Apple Silicon 全是 0；`gpu_power` sampler 也要 +2.1%。改成：CPU 用 `libproc` 差分每個 process 的累計 CPU 時間（`proc_pidinfo PROC_PIDTASKINFO`，不需 root，每輪幾毫秒）—— 注意 `pti_total_user/system` 在 Apple Silicon 是 Mach tick（125/3 ns），Intel 剛好 1:1 所以文件都當它是 ns，不換算會少算 41 倍。GPU 用 IOReport `GPU Stats / GPU Performance States`：CPU 那邊 IOReport 是軟體檔位不可信，但 GPU 的「非 OFF 比例」就是使用率，狀態分布也和 powermetrics 對得上；頻率表在 pmgr `voltage-states9-sram`，單位 Hz（CPU 表是 kHz）。GPU 有沒有被熱降頻則看同群組的 `CLTM-induced GPU Performance States`（CLTM = closed-loop thermal management）：平常 `NO_CLTM` 100%，被壓檔位時會出現其他狀態；超過 5% 時間就算 GPU 熱降頻，結論、統計、hook 都把它和 CPU 的 pressure 同等看待。
 
 **17. main.swift 頂層變數的初始化順序**
 `main.swift` 的頂層 `let` 是依序執行的，`runGuard` 在 `switch` 裡被呼叫時，寫在後面的 `DateFormatter` 還沒建好，時間戳輸出空字串。放進 `enum` 用 `static let`（lazy）就好。

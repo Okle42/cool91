@@ -31,6 +31,8 @@ public struct Snapshot: Codable {
     /// GPU 使用率（%）與頻率（IOReport，guard 每輪取樣）
     public var gpuActive: Double? = nil
     public var gpuMHz: Double? = nil
+    /// GPU 被熱管理限制檔位的時間比例（IOReport GPU_CLTM）；> 5% 視為 GPU 熱降頻
+    public var gpuThrottlePercent: Double? = nil
     /// 現在誰在吃 CPU（前幾名）
     public var topProcesses: [TopProcess]? = nil
 
@@ -69,7 +71,7 @@ public struct Snapshot: Codable {
     /// 手動解碼：新加的欄位缺席時用預設值，舊版 guard 寫的快照也讀得懂
     enum CodingKeys: String, CodingKey {
         case time, cpuMax, cpuAvg, gpuMax, controlTemp, ssd, fans, level, sensorOK, guardRunning, guardTargetRPM, guardMode, boostUntil, stats,
-             pcoreMHz, ecoreMHz, thermalPressure, cpuKeys, gpuKeys, gpuActive, gpuMHz, topProcesses
+             pcoreMHz, ecoreMHz, thermalPressure, cpuKeys, gpuKeys, gpuActive, gpuMHz, gpuThrottlePercent, topProcesses
     }
     public init(from d: Decoder) throws {
         let c = try d.container(keyedBy: CodingKeys.self)
@@ -94,6 +96,7 @@ public struct Snapshot: Codable {
         gpuKeys = try c.decodeIfPresent([String].self, forKey: .gpuKeys)
         gpuActive = try c.decodeIfPresent(Double.self, forKey: .gpuActive)
         gpuMHz = try c.decodeIfPresent(Double.self, forKey: .gpuMHz)
+        gpuThrottlePercent = try c.decodeIfPresent(Double.self, forKey: .gpuThrottlePercent)
         topProcesses = try c.decodeIfPresent([TopProcess].self, forKey: .topProcesses)
     }
     public init(time: Date, cpuMax: Double, cpuAvg: Double, gpuMax: Double, ssd: Double?, fans: [FanState], level: Level, guardRunning: Bool, guardTargetRPM: Double?) {
@@ -153,6 +156,7 @@ public struct Snapshot: Codable {
         snap.gpuKeys = cachedGPUKeys
         snap.gpuActive = alive ? saved?.gpuActive : nil
         snap.gpuMHz = alive ? saved?.gpuMHz : nil
+        snap.gpuThrottlePercent = alive ? saved?.gpuThrottlePercent : nil
         snap.topProcesses = alive ? saved?.topProcesses : nil
         snap.pcoreMHz = alive ? saved?.pcoreMHz : nil
         snap.ecoreMHz = alive ? saved?.ecoreMHz : nil
@@ -198,16 +202,20 @@ public struct Snapshot: Codable {
         var s = String(format: "%@ %.0f°C 🌀%@rpm", level.emoji, controlTemp, fan)
         if let p = pcoreMHz, p >= 100 { s += String(format: " ⚡%.2fGHz", p / 1000) }
         if let t = thermalPressure, t != "Nominal" { s += " 降頻(\(t))" }
+        if gpuThrottling { s += " GPU降頻" }
         return s
     }
     /// 是否正被熱降頻（powermetrics 的 pressure 非 Nominal）
     public var throttling: Bool { thermalPressure.map { $0 != "Nominal" } ?? false }
+    /// GPU 是否正被熱管理限制（CLTM 介入超過 5% 時間）
+    public var gpuThrottling: Bool { (gpuThrottlePercent ?? 0) > 5 }
 
     public var pretty: String {
         var s = "\(level.emoji) 等級: \(level.rawValue)\n"
         s += String(format: "CPU  最高 %.1f°C  平均 %.1f°C\n", cpuMax, cpuAvg)
         s += String(format: "GPU  最高 %.1f°C", gpuMax)
         if let a = gpuActive { s += String(format: "  使用率 %.0f%%  %.0f MHz", a, gpuMHz ?? 0) }
+        if gpuThrottling { s += String(format: "  ⚠️ GPU 熱降頻中（CLTM %.0f%%）", gpuThrottlePercent ?? 0) }
         s += "\n"
         if let ssd { s += String(format: "SSD  %.1f°C\n", ssd) }
         if let p = pcoreMHz {
