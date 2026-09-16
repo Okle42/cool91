@@ -69,6 +69,7 @@ do {
         for (k, v) in SMC.scanTemperatureKeys() { print(k, String(format: "%6.1f", v)) }
 
     case "chip":
+        Snapshot.forceRescan = true
         print("晶片:", chipName())
         let s = Snapshot.take(config: config)
         print("CPU 感測器 (\(Snapshot.cachedCPUKeys.count)):", Snapshot.cachedCPUKeys.joined(separator: " "))

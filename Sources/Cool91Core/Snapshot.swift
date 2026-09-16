@@ -25,6 +25,9 @@ public struct Snapshot: Codable {
     public var thermalPressure: String? = nil
     /// 今日統計（guard 累計）
     public var stats: Stats? = nil
+    /// guard 掃描到的感測器 key，讓其他 process（CLI、面板）不用再列舉 1375 個 key
+    public var cpuKeys: [String]? = nil
+    public var gpuKeys: [String]? = nil
 
     public struct FanState: Codable {
         public var index: Int
@@ -61,7 +64,7 @@ public struct Snapshot: Codable {
     /// 手動解碼：新加的欄位缺席時用預設值，舊版 guard 寫的快照也讀得懂
     enum CodingKeys: String, CodingKey {
         case time, cpuMax, cpuAvg, gpuMax, controlTemp, ssd, fans, level, sensorOK, guardRunning, guardTargetRPM, guardMode, boostUntil, stats,
-             pcoreMHz, ecoreMHz, thermalPressure
+             pcoreMHz, ecoreMHz, thermalPressure, cpuKeys, gpuKeys
     }
     public init(from d: Decoder) throws {
         let c = try d.container(keyedBy: CodingKeys.self)
@@ -82,6 +85,8 @@ public struct Snapshot: Codable {
         pcoreMHz = try c.decodeIfPresent(Double.self, forKey: .pcoreMHz)
         ecoreMHz = try c.decodeIfPresent(Double.self, forKey: .ecoreMHz)
         thermalPressure = try c.decodeIfPresent(String.self, forKey: .thermalPressure)
+        cpuKeys = try c.decodeIfPresent([String].self, forKey: .cpuKeys)
+        gpuKeys = try c.decodeIfPresent([String].self, forKey: .gpuKeys)
     }
     public init(time: Date, cpuMax: Double, cpuAvg: Double, gpuMax: Double, ssd: Double?, fans: [FanState], level: Level, guardRunning: Bool, guardTargetRPM: Double?) {
         self.time = time; self.cpuMax = cpuMax; self.cpuAvg = cpuAvg; self.gpuMax = gpuMax; self.ssd = ssd
@@ -94,11 +99,21 @@ public struct Snapshot: Codable {
     public static var cachedCPUKeys: [String] = []
     public static var cachedGPUKeys: [String] = []
 
+    /// 強制重新掃描（cool91 chip / sensors 用）
+    public static var forceRescan = false
+
     public static func take(config: Config) -> Snapshot {
         if cachedCPUKeys.isEmpty {
-            let all = SMC.scanTemperatureKeys().map { $0.0 }
-            cachedCPUKeys = all.filter { k in config.cpuPrefixes.contains { k.hasPrefix($0) } }
-            cachedGPUKeys = all.filter { k in config.gpuPrefixes.contains { k.hasPrefix($0) } }
+            // 先拿快照裡 guard 掃好的清單（前綴設定相同才用），省掉 1375 次 SMC 呼叫；沒有才自己掃
+            if !forceRescan, let saved = load(), let ck = saved.cpuKeys, !ck.isEmpty,
+               ck.allSatisfy({ k in config.cpuPrefixes.contains { k.hasPrefix($0) } }) {
+                cachedCPUKeys = ck
+                cachedGPUKeys = saved.gpuKeys ?? []
+            } else {
+                let all = SMC.scanTemperatureKeys().map { $0.0 }
+                cachedCPUKeys = all.filter { k in config.cpuPrefixes.contains { k.hasPrefix($0) } }
+                cachedGPUKeys = all.filter { k in config.gpuPrefixes.contains { k.hasPrefix($0) } }
+            }
         }
         // SMC 偶爾回假值（GPU 讀到 1°C 之類），跟掃描時一樣只收 10–125
         let cpu = cachedCPUKeys.compactMap(SMC.readDouble).filter(SMC.plausibleTemp)
@@ -126,6 +141,8 @@ public struct Snapshot: Codable {
         snap.guardMode = alive ? saved?.guardMode : nil
         snap.boostUntil = alive ? saved?.boostUntil : nil
         snap.stats = alive ? saved?.stats : nil
+        snap.cpuKeys = cachedCPUKeys
+        snap.gpuKeys = cachedGPUKeys
         snap.pcoreMHz = alive ? saved?.pcoreMHz : nil
         snap.ecoreMHz = alive ? saved?.ecoreMHz : nil
         snap.thermalPressure = alive ? saved?.thermalPressure : nil

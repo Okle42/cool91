@@ -10,8 +10,10 @@
   </array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
-  <key>ProcessType</key><string>Background</string>
-  <key>Nice</key><integer>10</integer>
+  <!-- 不能用 Background：高負載時會被降到最低 QoS 餓死，1375 次 SMC 呼叫要跑好幾分鐘 —— 而那正是最需要控風扇的時候。
+       Standard + nice -5 讓 guard 每 5 秒都排得到 CPU（實際用量 0.1%，不會搶到別人） -->
+  <key>ProcessType</key><string>Standard</string>
+  <key>Nice</key><integer>-5</integer>
   <!-- 主 log 由 guard 自己 append 到 /var/log/cool91.log（帶時間戳、可被 newsyslog 輪替）；這裡只接崩潰訊息 -->
   <key>StandardErrorPath</key><string>/var/log/cool91.err.log</string>
 </dict>

@@ -71,9 +71,26 @@ func runGuard(config initial: Config, dryRun: Bool, interval: Double) throws {
     var stats = Snapshot.load()?.stats.flatMap { $0.date == Snapshot.Stats.today() ? $0 : nil } ?? Snapshot.Stats(date: Snapshot.Stats.today())
     var history = History.load().filter { Date().timeIntervalSince($0.time) < History.keep }
 
+    // Watchdog：主迴圈卡在 kernel 呼叫（SMC mach_msg 不回、被餓死…）連 SIGTERM 都收不到；
+    // 另一條 thread 看心跳，超過 6 個週期沒動就自殺讓 launchd（KeepAlive）重啟
+    let heartbeat = UnsafeMutablePointer<Double>.allocate(capacity: 1)
+    heartbeat.pointee = Date().timeIntervalSince1970
+    let watchdogLimit = max(30, interval * 6)
+    Thread.detachNewThread {
+        while true {
+            Thread.sleep(forTimeInterval: 5)
+            let age = Date().timeIntervalSince1970 - heartbeat.pointee
+            if age > watchdogLimit {
+                guardLog("⚠️ watchdog：主迴圈 \(Int(age)) 秒沒心跳（卡在 SMC 或被餓死），自殺讓 launchd 重啟", toFile: isRoot && !dryRun)
+                _exit(3)
+            }
+        }
+    }
+
     log("cool91 guard 啟動（\(chipName())，\(fanCount) 顆風扇，每 \(interval)s，模式 \(config.mode)，GPU \(config.includeGPU ? "納入" : "不納入")，\(dryRun ? "dry-run" : "控制中")）")
 
     while !stopping {
+        heartbeat.pointee = Date().timeIntervalSince1970
         // 設定檔熱重載：解析失敗（含面板寫到一半）就保留舊設定，下一輪再試
         if let m = Config.mtime(config.loadedFrom), m != configMtime {
             do {

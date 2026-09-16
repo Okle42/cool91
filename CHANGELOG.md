@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.2 — 2026-09-16
+
+- **修 guard 高負載餓死**：LaunchDaemon `Background`/`Nice 10` → `Standard`/`Nice -5`；load 35 時啟動從 >3 分鐘變同一秒
+- 感測器 key 清單寫進快照，CLI / 面板 / guard 重啟不再每次列舉 1375 個 key（`cool91 chip` 仍強制重掃）
+- guard watchdog：6 個週期沒心跳自殺讓 launchd 重啟
+- SMC 假值過濾（看過 GPU 讀到 1°C），讀值只收 10–125°C
+- 升速斜率限制 +800/輪（預熱與剛接管不限），階段性負載下聲音變化平順
+- 面板：一句結論 + 三張帶目前值的卡 + 統一時間軸；漸層微光風格；曲線預覽
+- docs/findings-m4-sensors.md、macmon issue #78
+
 ## 0.2.1 — 2026-09-16
 
 整頓，不改行為：
