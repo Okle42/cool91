@@ -64,6 +64,7 @@ func runGuard(config initial: Config, dryRun: Bool, interval: Double) throws {
     var lastLevel: Level? = nil
     var wasThrottling = false
     var lastFreqError: String? = nil
+    var coolRounds = 0           // 連續幾輪目標低於現在（降速前的等待計數）
     var faultStreak = 0          // 連續感測器故障輪數
     var boostUntil: Date? = nil
     var boostRPM: Double = 0
@@ -157,6 +158,13 @@ func runGuard(config initial: Config, dryRun: Bool, interval: Double) throws {
             }
             // 任何來源的目標都夾在韌體回報的 F0Mn–F0Mx 之間，永遠不會超轉
             var target = desired.map { min(max($0, fmin), fmax) }
+            // 降速要「連續 N 輪都偏冷」才開始，短暫鬆一下不理；一旦要升速就立刻歸零
+            if let t = target, lastTarget >= 0, t < lastTarget - config.deadband {
+                coolRounds += 1
+                if coolRounds <= config.rampDownHoldRounds { target = lastTarget }
+            } else {
+                coolRounds = 0
+            }
             // 斜率限制：降速每輪最多 maxRampDown，升速每輪最多 maxRampUp（預熱與剛接管時不限，該快就快）
             if let t = target, lastTarget >= 0 {
                 if config.maxRampDown > 0, t < lastTarget - config.maxRampDown { target = lastTarget - config.maxRampDown }
