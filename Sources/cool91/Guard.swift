@@ -140,9 +140,11 @@ func runGuard(config initial: Config, dryRun: Bool, interval: Double) throws {
             }
             // 任何來源的目標都夾在韌體回報的 F0Mn–F0Mx 之間，永遠不會超轉
             var target = desired.map { min(max($0, fmin), fmax) }
-            // 降速斜率限制：升速不限，降速每輪最多降 maxRampDown
-            if let t = target, lastTarget >= 0, config.maxRampDown > 0, t < lastTarget - config.maxRampDown {
-                target = lastTarget - config.maxRampDown
+            // 斜率限制：降速每輪最多 maxRampDown，升速每輪最多 maxRampUp（預熱與剛接管時不限，該快就快）
+            if let t = target, lastTarget >= 0 {
+                if config.maxRampDown > 0, t < lastTarget - config.maxRampDown { target = lastTarget - config.maxRampDown }
+                let boosting = boostUntil.map { $0 > Date() } ?? false
+                if config.maxRampUp > 0, !boosting, t > lastTarget + config.maxRampUp { target = lastTarget + config.maxRampUp }
             }
 
             if let target {

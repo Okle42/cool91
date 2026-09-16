@@ -56,3 +56,14 @@ final class SnapshotTests: XCTestCase {
         }
     }
 }
+
+final class PlausibleTempTests: XCTestCase {
+    func testRejectsBogusReadings() {
+        XCTAssertFalse(SMC.plausibleTemp(0))
+        XCTAssertFalse(SMC.plausibleTemp(1))      // 實際看過 GPU 讀到 1°C
+        XCTAssertFalse(SMC.plausibleTemp(-3))
+        XCTAssertFalse(SMC.plausibleTemp(200))
+        XCTAssertTrue(SMC.plausibleTemp(10.5))
+        XCTAssertTrue(SMC.plausibleTemp(105))
+    }
+}

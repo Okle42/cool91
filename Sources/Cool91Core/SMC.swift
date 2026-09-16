@@ -71,10 +71,13 @@ public enum SMC {
         return out
     }
 
+    /// 溫度讀值是否合理（SMC 偶爾回 0 / 1 / 負數這種假值）
+    public static func plausibleTemp(_ t: Double) -> Bool { t > 10 && t < 125 }
+
     /// 掃描看起來像溫度的感測器：T 開頭、flt/sp78 型別、值在合理範圍
     public static func scanTemperatureKeys() -> [(String, Double)] {
         allKeys().filter { $0.hasPrefix("T") }.compactMap { k in
-            guard let v = read(k), v.type == "flt " || v.type == "sp78", let d = v.double, d > 10, d < 120 else { return nil }
+            guard let v = read(k), v.type == "flt " || v.type == "sp78", let d = v.double, plausibleTemp(d) else { return nil }
             return (k, d)
         }
     }

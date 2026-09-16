@@ -100,8 +100,9 @@ public struct Snapshot: Codable {
             cachedCPUKeys = all.filter { k in config.cpuPrefixes.contains { k.hasPrefix($0) } }
             cachedGPUKeys = all.filter { k in config.gpuPrefixes.contains { k.hasPrefix($0) } }
         }
-        let cpu = cachedCPUKeys.compactMap(SMC.readDouble)
-        let gpu = cachedGPUKeys.compactMap(SMC.readDouble)
+        // SMC 偶爾回假值（GPU 讀到 1°C 之類），跟掃描時一樣只收 10–125
+        let cpu = cachedCPUKeys.compactMap(SMC.readDouble).filter(SMC.plausibleTemp)
+        let gpu = cachedGPUKeys.compactMap(SMC.readDouble).filter(SMC.plausibleTemp)
         // 若 guard 有在跑，補上它的資訊；感測器偶爾讀空時也拿上一筆頂著，不要畫出掉到 0 的尖刺
         let saved = load()
         let cpuMax = cpu.max() ?? saved?.cpuMax ?? 0
@@ -115,7 +116,7 @@ public struct Snapshot: Codable {
                         cpuMax: cpuMax,
                         cpuAvg: cpu.isEmpty ? 0 : cpu.reduce(0, +) / Double(cpu.count),
                         gpuMax: gpuMax,
-                        ssd: SMC.readDouble("TH0x") ?? saved?.ssd,
+                        ssd: SMC.readDouble("TH0x").flatMap { SMC.plausibleTemp($0) ? $0 : nil } ?? saved?.ssd,
                         fans: fans,
                         level: config.level(for: control),
                         guardRunning: alive,

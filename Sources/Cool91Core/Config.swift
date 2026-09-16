@@ -25,8 +25,9 @@ public struct Config: Codable {
     /// 溫度 EMA 係數，升溫與降溫分開：升溫反應快、降溫慢慢放，風扇不會忽高忽低
     public var smoothingUp: Double = 0.7
     public var smoothingDown: Double = 0.2
-    /// 每輪最多降多少 rpm（0 = 不限制）。升速不限制
+    /// 每輪最多降 / 升多少 rpm（0 = 不限制）。降慢是護風扇，升也限一下是讓聲音變化平順（+800/5 秒，3000 → 4900 只要 12 秒）
     public var maxRampDown: Double = 300
+    public var maxRampUp: Double = 800
     /// 控制與把關是否把 GPU 溫度也算進去（取 CPU/GPU 最高值）
     public var includeGPU: Bool = true
     /// 把關門檻（以控制溫度為準）
@@ -57,7 +58,7 @@ public struct Config: Codable {
     public private(set) var loadedFrom: String? = nil
 
     enum CodingKeys: String, CodingKey {
-        case curve, mode, fixedRPM, interval, deadband, smoothingUp, smoothingDown, maxRampDown, includeGPU,
+        case curve, mode, fixedRPM, interval, deadband, smoothingUp, smoothingDown, maxRampDown, maxRampUp, includeGPU,
              warmTemp, hotTemp, criticalTemp, hookWaitSeconds, hookBlockOnCritical, hookAllowCommands,
              boostCommands, boostRPM, boostSeconds, cpuPrefixes, gpuPrefixes
     }
@@ -72,6 +73,7 @@ public struct Config: Codable {
         smoothingUp = try c.decodeIfPresent(Double.self, forKey: .smoothingUp) ?? smoothingUp
         smoothingDown = try c.decodeIfPresent(Double.self, forKey: .smoothingDown) ?? smoothingDown
         maxRampDown = try c.decodeIfPresent(Double.self, forKey: .maxRampDown) ?? maxRampDown
+        maxRampUp = try c.decodeIfPresent(Double.self, forKey: .maxRampUp) ?? maxRampUp
         includeGPU = try c.decodeIfPresent(Bool.self, forKey: .includeGPU) ?? includeGPU
         warmTemp = try c.decodeIfPresent(Double.self, forKey: .warmTemp) ?? warmTemp
         hotTemp = try c.decodeIfPresent(Double.self, forKey: .hotTemp) ?? hotTemp
