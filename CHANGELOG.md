@@ -11,6 +11,7 @@
 - guard 收 SIGTERM 保持轉速不交還（launchd 重啟接管只要幾秒）；`uninstall.sh` 明確 `fan auto`；`doctor` 偵測「guard 沒跑但風扇停在手動」
 - `cool91 top` / 面板「現在誰在算」（libproc 差分，Mach tick 換算）、GPU 使用率與頻率（IOReport）、GPU 熱降頻（`GPU_CLTM`）
 - daemon 以 `cool91-guard` symlink 啟動，登入項目分得清
+- 已知盲區（待做）：記憶體壓力。同日一個 OCCT 布林工具吃到 31 GB 讓機器進 swap，CPU 8%、機器涼、風扇低，cool91 結論顯示「閒置 · 未降頻」但工作實際卡死。計畫把 free % / swap / `memory_pressure` 接進快照、面板結論與 hook 警告
 
 ## 0.2.2 — 2026-09-16
 

@@ -4,6 +4,8 @@
 > **當 Claude Code 這類 AI agent 在你的 Mac 上跑重工作時，讓機器全力開工、風扇負責避免降頻；只有真的降頻了才讓工作等一下。**
 > 整套常駐 **0.3% CPU / 10 MB**（guard 0.1% + 頻率讀取 0.18%）。
 
+**白話版**：Apple 的風扇策略是安靜優先，CPU 燒到 100°C 才慢慢加速，然後 CPU 靜靜地自己放慢 15–25%，你不會知道。cool91 反過來：風扇轉到「剛好不降頻」的最低轉速（M4 mini 實測 87°C / 3150 rpm），面板第一行直接告訴你「全速運作 · 未降頻」或「降頻中」，Claude Code 只在真的降頻時才等一下。它自己在機器最忙的時候也不會掛掉（這是踩過坑才學到的，見下面第 15 條）。
+
 ![Mac mini M4](https://img.shields.io/badge/tested-Mac%20mini%20M4-blue) ![macOS](https://img.shields.io/badge/macOS-14%2B-lightgrey) ![Swift](https://img.shields.io/badge/Swift-6-orange) ![deps](https://img.shields.io/badge/dependencies-0-brightgreen) ![license](https://img.shields.io/badge/license-MIT-green)
 
 ---
@@ -32,10 +34,13 @@ Mac mini M4 的預設風扇策略極度保守 —— **CPU 已經 100°C，風�
 | CPU + GPU 一起看 | ✅ 取兩者最高值決定風扇與把關 | ✅ |
 | 風扇不忽高忽低 | ✅ 升溫快反應、降溫慢放，每 5 秒最多降 300 rpm | 部分 |
 | **CPU 硬體頻率 / 熱降頻偵測** | ✅ P-core GHz、thermal pressure；降頻時面板 / statusline 標紅、log 記錄 | ❌ |
+| **GPU 使用率 / GPU 熱降頻** | ✅ IOReport 使用率與頻率、`GPU_CLTM` 熱限制偵測 | ❌ |
+| **現在誰在算** | ✅ `cool91 top` / 面板一行：CPU 前幾名的命令與工作目錄 | ❌ |
 | **AI agent 把關** | ✅ Claude Code PreToolUse hook：**真的降頻才等**，溫度高但沒降頻照跑 | ❌ |
 | **重指令預熱** | ✅ Claude 要跑 `swift build` / `blender` / `ffmpeg`… 前先把風扇拉起來 | ❌ |
 | CLI / 腳本可查詢 | ✅ `cool91 check` 回 exit code 0/1/2 | ❌ |
-| 每日統計 | ✅ 降頻秒數、hot / critical 秒數、hook 等待與擋下、最高溫 | ❌ |
+| 每日統計 | ✅ 降頻秒數、hot / critical 秒數、hook 等待與擋下、預熱次數、最高溫 | ❌ |
+| 高負載下自己不會掛 | ✅ Standard 優先權 + watchdog；重啟時風扇維持不放手 | — |
 | 選單列顯示 | ✅ `🟡 82°`，點開有溫度 / 風扇 / 頻率三張 5 分鐘曲線圖 | ✅ |
 | 常駐負載 | **0.3% CPU / 10 MB**（實測） | 數十 MB |
 | 外部依賴 | **0**（純 Swift + 80 行 C，SwiftPM 直接 build） | 閉源 |
