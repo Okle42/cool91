@@ -107,6 +107,7 @@ cool91 status            # 溫度 / 頻率 / 風扇 / 等級 / guard 狀態 / �
 cool91 status --short    # 🟡 86°C 🌀3743rpm ⚡3.98GHz（降頻時多一個「降頻(Moderate)」）
 cool91 check ; echo $?   # 0=可開工 1=降頻中該等 2=該擋（和 hook 同一套判斷）
 cool91 wait              # 阻塞到降頻結束；--below 85 改為等控制溫度降到 85 以下
+cool91 top               # 現在誰在吃 CPU（命令列 + 工作目錄）、GPU 使用率與頻率
 cool91 doctor            # 檢查 guard、快照、頻率、hook、設定檔、log 輪替、衝突程式
 cool91 sensors           # 列出所有溫度感測器（移植新晶片用）
 cool91 chip              # 晶片型號與感測器分組
@@ -114,7 +115,7 @@ sudo cool91 fan 3000     # 手動設轉速；sudo cool91 fan auto 交還
 tail -f /var/log/cool91.log
 ```
 
-**面板**：選單列右上角，漸層微光風格（深色底、霓虹發光線、線下漸層）。頂端一句結論（全速運作 / 降頻中 / 溫度危險），溫度 / 風扇 / P-core 頻率三張卡各帶目前值與 5 分鐘曲線，今日統計列，曲線預覽圖（標出目前溫度與風扇位置），模式「曲線 / 固定 / 自動」，內建「安靜 / 均衡 / 強力」三組曲線，也可逐點自訂，按「套用」即生效。
+**面板**：選單列右上角，漸層微光風格（深色底、霓虹發光線、線下漸層）。頂端一句結論（全速運作 / 降頻中 / 溫度危險），下面一行「現在誰在算」（前兩名 process 的命令與工作目錄），溫度 / 風扇 / P-core 頻率三張卡各帶目前值與 5 分鐘曲線，今日統計列，曲線預覽圖（標出目前溫度與風扇位置），模式「曲線 / 固定 / 自動」，內建「安靜 / 均衡 / 強力」三組曲線，也可逐點自訂，按「套用」即生效。
 
 **設定檔** `/etc/cool91/config.json`（範例見 `config.example.json`）：曲線、門檻、平滑係數、降速斜率、GPU 是否納入、白名單、預熱關鍵字、感測器前綴都在這。改了不用重啟，解析失敗會保留上一份。
 
@@ -208,7 +209,10 @@ Claude Code hook 預設 60 秒逾時，而等待上限是 90 秒 —— hook 設
 **15. guard 在高負載時被餓死 —— 最需要它的時候它動不了**
 第一版 LaunchDaemon 用 `ProcessType Background` + `Nice 10`，想說「常駐程式要低調」。結果 load 35 時 guard 啟動後卡了三分鐘還沒跑完第一輪：`sample` 看到 1375 次 SMC 列舉呼叫全部在 `mach_msg2_trap` 排隊，同時另一個一般 process 掃同樣的 key 只要 0.2 秒。Background QoS 在系統忙時幾乎拿不到 CPU，而風扇守門員最需要工作的時刻正是系統最忙的時刻 —— 這個設定剛好反了。改成 `Standard` + `Nice -5`（實際用量 0.1%，搶不到別人），同樣負載下啟動同一秒就完成第一輪。另外兩層防禦：guard 把掃到的 key 清單寫進快照，CLI / 面板 / 重啟後的 guard 直接用，不再每次列舉 1375 個 key；主迴圈加 watchdog thread，6 個週期沒心跳就 `_exit` 讓 launchd 重啟（卡在 kernel 呼叫時連 SIGTERM 都收不到，只能靠這個）。
 
-**16. main.swift 頂層變數的初始化順序**
+**16. 「現在誰在算」與 GPU 使用率，不靠 powermetrics**
+`powermetrics --samplers tasks` 每個 process 的 CPU 很準但常駐要 +2.7% CPU，而且它的 per-process GPU 時間在 Apple Silicon 全是 0；`gpu_power` sampler 也要 +2.1%。改成：CPU 用 `libproc` 差分每個 process 的累計 CPU 時間（`proc_pidinfo PROC_PIDTASKINFO`，不需 root，每輪幾毫秒）—— 注意 `pti_total_user/system` 在 Apple Silicon 是 Mach tick（125/3 ns），Intel 剛好 1:1 所以文件都當它是 ns，不換算會少算 41 倍。GPU 用 IOReport `GPU Stats / GPU Performance States`：CPU 那邊 IOReport 是軟體檔位不可信，但 GPU 的「非 OFF 比例」就是使用率，狀態分布也和 powermetrics 對得上；頻率表在 pmgr `voltage-states9-sram`，單位 Hz（CPU 表是 kHz）。
+
+**17. main.swift 頂層變數的初始化順序**
 `main.swift` 的頂層 `let` 是依序執行的，`runGuard` 在 `switch` 裡被呼叫時，寫在後面的 `DateFormatter` 還沒建好，時間戳輸出空字串。放進 `enum` 用 `static let`（lazy）就好。
 
 ## 移植新晶片（M5 / M6 …）

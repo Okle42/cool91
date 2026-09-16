@@ -28,6 +28,11 @@ public struct Snapshot: Codable {
     /// guard 掃描到的感測器 key，讓其他 process（CLI、面板）不用再列舉 1375 個 key
     public var cpuKeys: [String]? = nil
     public var gpuKeys: [String]? = nil
+    /// GPU 使用率（%）與頻率（IOReport，guard 每輪取樣）
+    public var gpuActive: Double? = nil
+    public var gpuMHz: Double? = nil
+    /// 現在誰在吃 CPU（前幾名）
+    public var topProcesses: [TopProcess]? = nil
 
     public struct FanState: Codable {
         public var index: Int
@@ -64,7 +69,7 @@ public struct Snapshot: Codable {
     /// 手動解碼：新加的欄位缺席時用預設值，舊版 guard 寫的快照也讀得懂
     enum CodingKeys: String, CodingKey {
         case time, cpuMax, cpuAvg, gpuMax, controlTemp, ssd, fans, level, sensorOK, guardRunning, guardTargetRPM, guardMode, boostUntil, stats,
-             pcoreMHz, ecoreMHz, thermalPressure, cpuKeys, gpuKeys
+             pcoreMHz, ecoreMHz, thermalPressure, cpuKeys, gpuKeys, gpuActive, gpuMHz, topProcesses
     }
     public init(from d: Decoder) throws {
         let c = try d.container(keyedBy: CodingKeys.self)
@@ -87,6 +92,9 @@ public struct Snapshot: Codable {
         thermalPressure = try c.decodeIfPresent(String.self, forKey: .thermalPressure)
         cpuKeys = try c.decodeIfPresent([String].self, forKey: .cpuKeys)
         gpuKeys = try c.decodeIfPresent([String].self, forKey: .gpuKeys)
+        gpuActive = try c.decodeIfPresent(Double.self, forKey: .gpuActive)
+        gpuMHz = try c.decodeIfPresent(Double.self, forKey: .gpuMHz)
+        topProcesses = try c.decodeIfPresent([TopProcess].self, forKey: .topProcesses)
     }
     public init(time: Date, cpuMax: Double, cpuAvg: Double, gpuMax: Double, ssd: Double?, fans: [FanState], level: Level, guardRunning: Bool, guardTargetRPM: Double?) {
         self.time = time; self.cpuMax = cpuMax; self.cpuAvg = cpuAvg; self.gpuMax = gpuMax; self.ssd = ssd
@@ -143,6 +151,9 @@ public struct Snapshot: Codable {
         snap.stats = alive ? saved?.stats : nil
         snap.cpuKeys = cachedCPUKeys
         snap.gpuKeys = cachedGPUKeys
+        snap.gpuActive = alive ? saved?.gpuActive : nil
+        snap.gpuMHz = alive ? saved?.gpuMHz : nil
+        snap.topProcesses = alive ? saved?.topProcesses : nil
         snap.pcoreMHz = alive ? saved?.pcoreMHz : nil
         snap.ecoreMHz = alive ? saved?.ecoreMHz : nil
         snap.thermalPressure = alive ? saved?.thermalPressure : nil
@@ -195,10 +206,15 @@ public struct Snapshot: Codable {
     public var pretty: String {
         var s = "\(level.emoji) 等級: \(level.rawValue)\n"
         s += String(format: "CPU  最高 %.1f°C  平均 %.1f°C\n", cpuMax, cpuAvg)
-        s += String(format: "GPU  最高 %.1f°C\n", gpuMax)
+        s += String(format: "GPU  最高 %.1f°C", gpuMax)
+        if let a = gpuActive { s += String(format: "  使用率 %.0f%%  %.0f MHz", a, gpuMHz ?? 0) }
+        s += "\n"
         if let ssd { s += String(format: "SSD  %.1f°C\n", ssd) }
         if let p = pcoreMHz {
             s += String(format: "頻率 P-core %@  E-core %.2f GHz  熱壓力 %@%@\n", p >= 100 ? String(format: "%.2f GHz", p / 1000) : "閒置", (ecoreMHz ?? 0) / 1000, thermalPressure ?? "?", throttling ? "（降頻中）" : "")
+        }
+        if let top = topProcesses, !top.isEmpty {
+            s += "在算：" + top.map { String(format: "%@ %.0f%%%@", $0.command, $0.cpuPercent, $0.cwd.map { "（\($0)）" } ?? "") }.joined(separator: "；") + "\n"
         }
         if !sensorOK { s += "⚠️ 感測器讀取不完整\n" }
         for f in fans {
@@ -233,8 +249,9 @@ public struct HistoryPoint: Codable {
     public var rpm: Double
     public var target: Double?
     public var pMHz: Double? = nil
-    public init(time: Date, cpu: Double, gpu: Double, rpm: Double, target: Double?, pMHz: Double? = nil) {
-        self.time = time; self.cpu = cpu; self.gpu = gpu; self.rpm = rpm; self.target = target; self.pMHz = pMHz
+    public var gpuActive: Double? = nil
+    public init(time: Date, cpu: Double, gpu: Double, rpm: Double, target: Double?, pMHz: Double? = nil, gpuActive: Double? = nil) {
+        self.time = time; self.cpu = cpu; self.gpu = gpu; self.rpm = rpm; self.target = target; self.pMHz = pMHz; self.gpuActive = gpuActive
     }
 }
 

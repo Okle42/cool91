@@ -1,6 +1,7 @@
 #ifndef CSMC_H
 #define CSMC_H
 #include <stdint.h>
+#include "cproc.h"
 
 /// 開啟 AppleSMC 連線。回傳 0 成功，否則為 IOKit kern_return_t。
 int smc_open(void);

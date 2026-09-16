@@ -41,6 +41,8 @@ func runGuard(config initial: Config, dryRun: Bool, interval: Double) throws {
     Event.prepareDir()
     // 硬體頻率與 thermal pressure：root 才讀得到（powermetrics）
     let freq = FreqReader(interval: interval)
+    let gpuStats = GPUStats()
+    let procTop = ProcTop()
     if FreqReader.available { freq.ensureRunning() } else { log("powermetrics 不可用（非 root 或找不到），不顯示頻率") }
 
     // 收到終止訊號時把風扇交還 SMC
@@ -120,6 +122,8 @@ func runGuard(config initial: Config, dryRun: Bool, interval: Double) throws {
         if let b = boostUntil, b <= Date() { boostUntil = nil; boostRPM = 0 }
 
         var s = Snapshot.take(config: config)
+        if let g = gpuStats.sample() { s.gpuActive = g.active; s.gpuMHz = g.mhz }
+        let top = procTop.sample(); if !top.isEmpty { s.topProcesses = top }
 
         // 跨日歸零
         if stats.date != Snapshot.Stats.today() {
@@ -216,7 +220,7 @@ func runGuard(config initial: Config, dryRun: Bool, interval: Double) throws {
         s.stats = stats
         s.save()
 
-        history.append(HistoryPoint(time: s.time, cpu: s.cpuMax, gpu: s.gpuMax, rpm: s.fans.first?.rpm ?? 0, target: auto ? nil : lastTarget, pMHz: s.pcoreMHz))
+        history.append(HistoryPoint(time: s.time, cpu: s.cpuMax, gpu: s.gpuMax, rpm: s.fans.first?.rpm ?? 0, target: auto ? nil : lastTarget, pMHz: s.pcoreMHz, gpuActive: s.gpuActive))
         history.removeAll { Date().timeIntervalSince($0.time) > History.keep }
         History.save(history)
 

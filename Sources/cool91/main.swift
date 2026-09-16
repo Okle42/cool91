@@ -25,6 +25,7 @@ func usage() -> Never {
       check [--json]               能不能開工：exit 0=可以, 1=降頻中該等, 2=該擋（和 hook 同一套判斷）
       wait [--below TEMP] [--timeout S]   等到可開工（降頻結束）；--below 改為等控制溫度降到 TEMP 以下
       hook                         Claude Code PreToolUse hook 入口（讀 stdin，輸出決策 JSON）
+      top                          現在誰在吃 CPU、GPU 使用率（guard 每 5 秒更新；沒 guard 就自己量 2 秒）
       doctor                       檢查 guard / 快照 / hook / 設定檔 / 衝突程式是否都正常
 
     設定檔：/etc/cool91/config.json 或 ~/.config/cool91/config.json
@@ -115,6 +116,19 @@ do {
 
     case "hook":
         runHook(config: config)
+
+    case "top":
+        var s = Snapshot.takeFast(config: config)
+        if s.topProcesses == nil {   // guard 沒跑：自己差分 2 秒
+            let pt = ProcTop(); _ = pt.sample(); let g = GPUStats(); Thread.sleep(forTimeInterval: 2)
+            s.topProcesses = pt.sample(top: 5, minPercent: 5); if let r = g.sample() { s.gpuActive = r.active; s.gpuMHz = r.mhz }
+        }
+        print(s.short)
+        if let a = s.gpuActive { print(String(format: "GPU 使用率 %.0f%%  %.0f MHz  %.0f°C", a, s.gpuMHz ?? 0, s.gpuMax)) }
+        for p in s.topProcesses ?? [] {
+            print(String(format: "%6d  %5.0f%%  %@%@", p.pid, p.cpuPercent, p.command, p.cwd.map { "   （\($0)）" } ?? ""))
+        }
+        if (s.topProcesses ?? []).isEmpty { print("沒有 process 超過 20% CPU") }
 
     case "doctor":
         exit(runDoctor(config: config) ? 0 : 1)

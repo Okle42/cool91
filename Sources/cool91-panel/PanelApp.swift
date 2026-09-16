@@ -242,6 +242,21 @@ struct PanelView: View {
                 chipLabel(s.guardRunning ? "guard 執行中" : "guard 未執行", s.guardRunning ? Color.white.opacity(0.6) : Neon.amber)
             }
             statusLine(s)
+            if let top = s.topProcesses, !top.isEmpty { busyLine(top) }
+        }
+    }
+
+    /// 現在誰在吃 CPU：前兩名，一行
+    func busyLine(_ top: [TopProcess]) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "cpu").font(.caption2).foregroundStyle(.secondary)
+            ForEach(Array(top.prefix(2).enumerated()), id: \.offset) { i, p in
+                if i > 0 { Text("·").foregroundStyle(.quaternary) }
+                Text(String(format: "%.0f%%", p.cpuPercent)).font(.system(.caption2, design: .rounded).weight(.semibold)).foregroundStyle(Neon.cyan)
+                Text(p.command).font(.caption2).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                if let d = p.cwd { Text(d).font(.caption2).foregroundStyle(.tertiary).lineLimit(1) }
+            }
+            Spacer(minLength: 0)
         }
     }
 
@@ -301,7 +316,10 @@ struct PanelView: View {
         card(title: "溫度") {
             HStack(spacing: 10) {
                 HStack(spacing: 4) { legend("CPU", Neon.cyan); bigValue(String(format: "%.0f°", s.cpuMax), Neon.cyan) }
-                HStack(spacing: 4) { legend("GPU", Neon.green); bigValue(String(format: "%.0f°", s.gpuMax), Neon.green) }
+                HStack(spacing: 4) {
+                    legend("GPU", Neon.green); bigValue(String(format: "%.0f°", s.gpuMax), Neon.green)
+                    if let a = s.gpuActive { Text(String(format: "%.0f%%", a)).font(.caption2).foregroundStyle(.secondary) }
+                }
                 if let ssd = s.ssd { Text(String(format: "SSD %.0f°", ssd)).font(.caption2).foregroundStyle(.secondary) }
             }
         } chart: {
