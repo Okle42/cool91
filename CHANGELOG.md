@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.3 — 2026-09-16
+
+從 11 小時 log 分析後的調整：
+
+- 等級降級加 3°C 遲滯（`levelHysteresis`），等級事件從每小時 ~100 筆降到個位數
+- ≥ hot 時升速不限、EMA 不平滑，閒段 → 重載的一輪 +20°C 尖峰立刻全速
+- 預熱關鍵字加 `python -m` / `python3 -m`
+- deadband 100 → 150、降速 hold 4 → 6 輪
+- guard 收 SIGTERM 保持轉速不交還（launchd 重啟接管只要幾秒）；`uninstall.sh` 明確 `fan auto`；`doctor` 偵測「guard 沒跑但風扇停在手動」
+- `cool91 top` / 面板「現在誰在算」（libproc 差分，Mach tick 換算）、GPU 使用率與頻率（IOReport）、GPU 熱降頻（`GPU_CLTM`）
+- daemon 以 `cool91-guard` symlink 啟動，登入項目分得清
+
 ## 0.2.2 — 2026-09-16
 
 - **修 guard 高負載餓死**：LaunchDaemon `Background`/`Nice 10` → `Standard`/`Nice -5`；load 35 時啟動從 >3 分鐘變同一秒

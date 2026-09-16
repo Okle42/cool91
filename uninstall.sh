@@ -1,6 +1,7 @@
 #!/bin/bash
 set -uo pipefail
 sudo launchctl bootout system/com.cool91.guard 2>/dev/null
+sudo /usr/local/bin/cool91 fan auto 2>/dev/null   # guard 收 SIGTERM 會保持轉速（等重啟接管），移除時要明確交還
 sudo rm -rf /Library/LaunchDaemons/com.cool91.guard.plist /usr/local/bin/cool91 /usr/local/bin/cool91-guard /etc/newsyslog.d/cool91.conf /tmp/cool91.json /tmp/cool91.history.json /tmp/cool91.events
 launchctl bootout "gui/$(id -u)/com.cool91.panel" 2>/dev/null
 rm -f "$HOME/Library/LaunchAgents/com.cool91.panel.plist"

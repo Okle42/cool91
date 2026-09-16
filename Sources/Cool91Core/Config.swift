@@ -21,7 +21,7 @@ public struct Config: Codable {
     /// 輪詢間隔（秒）。5 秒 ≈ 每次讀 ~40 個 SMC key，負載可忽略
     public var interval: Double = 5
     /// 目標轉速差距小於此值就不寫 SMC，避免抖動
-    public var deadband: Double = 100
+    public var deadband: Double = 150
     /// 溫度 EMA 係數，升溫與降溫分開：升溫反應快、降溫慢慢放，風扇不會忽高忽低
     public var smoothingUp: Double = 0.7
     public var smoothingDown: Double = 0.2
@@ -29,9 +29,11 @@ public struct Config: Codable {
     public var maxRampDown: Double = 300
     public var maxRampUp: Double = 800
     /// 降速前要連續幾輪目標都低於現在才開始降（0 = 不等）。階段性負載「算一段、鬆幾秒、再算」時風扇不會跟著抽動
-    public var rampDownHoldRounds: Int = 4
+    public var rampDownHoldRounds: Int = 6
     /// 控制與把關是否把 GPU 溫度也算進去（取 CPU/GPU 最高值）
     public var includeGPU: Bool = true
+    /// 等級降級的遲滯：升級立即，降級要低於門檻這麼多度才降（溫度在門檻附近來回時不會一直 ok↔warm）
+    public var levelHysteresis: Double = 3
     /// 把關門檻（以控制溫度為準）
     public var warmTemp: Double = 80
     public var hotTemp: Double = 95
@@ -44,7 +46,7 @@ public struct Config: Codable {
     /// critical 時仍放行的指令（降溫、查狀態用）。比對每段指令的第一個 token 的檔名
     public var hookAllowCommands: [String] = ["cool91", "kill", "pkill", "killall", "pgrep", "ps", "top", "sleep", "cat", "tail", "grep", "echo", "launchctl"]
     /// 預熱：Bash 指令含這些關鍵字時，先把風扇拉到 boostRPM 撐 boostSeconds 秒（之後仍由曲線接管，取較大者）
-    public var boostCommands: [String] = ["swift build", "xcodebuild", "cmake", "ninja", "cargo build", "cargo test", "blender", "ffmpeg", "clang", "gcc", "rustc", "go build", "npm run build", "pytest", "make "]
+    public var boostCommands: [String] = ["swift build", "xcodebuild", "cmake", "ninja", "cargo build", "cargo test", "blender", "ffmpeg", "clang", "gcc", "rustc", "go build", "npm run build", "pytest", "python -m", "python3 -m", "make "]
     public var boostRPM: Double = 3000
     public var boostSeconds: Double = 120
     /// 溫度取樣來源前綴：Tp = P-core、Te = E-core、Tg = GPU
@@ -60,7 +62,7 @@ public struct Config: Codable {
     public private(set) var loadedFrom: String? = nil
 
     enum CodingKeys: String, CodingKey {
-        case curve, mode, fixedRPM, interval, deadband, smoothingUp, smoothingDown, maxRampDown, maxRampUp, rampDownHoldRounds, includeGPU,
+        case curve, mode, fixedRPM, interval, deadband, smoothingUp, smoothingDown, maxRampDown, maxRampUp, rampDownHoldRounds, levelHysteresis, includeGPU,
              warmTemp, hotTemp, criticalTemp, hookWaitSeconds, hookBlockOnCritical, hookAllowCommands,
              boostCommands, boostRPM, boostSeconds, cpuPrefixes, gpuPrefixes
     }
@@ -77,6 +79,7 @@ public struct Config: Codable {
         maxRampDown = try c.decodeIfPresent(Double.self, forKey: .maxRampDown) ?? maxRampDown
         maxRampUp = try c.decodeIfPresent(Double.self, forKey: .maxRampUp) ?? maxRampUp
         rampDownHoldRounds = try c.decodeIfPresent(Int.self, forKey: .rampDownHoldRounds) ?? rampDownHoldRounds
+        levelHysteresis = try c.decodeIfPresent(Double.self, forKey: .levelHysteresis) ?? levelHysteresis
         includeGPU = try c.decodeIfPresent(Bool.self, forKey: .includeGPU) ?? includeGPU
         warmTemp = try c.decodeIfPresent(Double.self, forKey: .warmTemp) ?? warmTemp
         hotTemp = try c.decodeIfPresent(Double.self, forKey: .hotTemp) ?? hotTemp
@@ -155,6 +158,23 @@ public struct Config: Codable {
         if temp >= hotTemp { return .hot }
         if temp >= warmTemp { return .warm }
         return .ok
+    }
+
+    /// 該等級的進入門檻
+    public func threshold(of level: Level) -> Double {
+        switch level {
+        case .ok: return -Double.infinity
+        case .warm: return warmTemp
+        case .hot: return hotTemp
+        case .critical: return criticalTemp
+        }
+    }
+
+    /// 帶遲滯的等級：升級立即；降級要低於目前等級的門檻 levelHysteresis 度
+    public func level(for temp: Double, previous: Level?) -> Level {
+        let raw = level(for: temp)
+        guard let prev = previous, raw < prev else { return raw }
+        return temp < threshold(of: prev) - levelHysteresis ? raw : prev
     }
 }
 

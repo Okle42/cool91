@@ -45,8 +45,10 @@ func runGuard(config initial: Config, dryRun: Bool, interval: Double) throws {
     let procTop = ProcTop()
     if FreqReader.available { freq.ensureRunning() } else { log("powermetrics 不可用（非 root 或找不到），不顯示頻率") }
 
-    // 收到終止訊號時把風扇交還 SMC
+    // 終止訊號：SIGTERM（launchd 停止 / 重啟）保持目前轉速不交還 —— 重啟接管只要幾秒，交還自動反而讓高負載下 30 秒衝到 100°C；
+    // SIGINT（Ctrl-C）/ SIGHUP 才交還自動。uninstall.sh 會明確 `cool91 fan auto`
     var stopping = false
+    var keepFansOnExit = false
     let restore = {
         if !dryRun { for i in 0..<fanCount { try? SMC.setFanAuto(i) } }
     }
@@ -54,7 +56,7 @@ func runGuard(config initial: Config, dryRun: Bool, interval: Double) throws {
     for sig in [SIGINT, SIGTERM, SIGHUP] {
         signal(sig, SIG_IGN)
         let src = DispatchSource.makeSignalSource(signal: sig, queue: .main)
-        src.setEventHandler { stopping = true }
+        src.setEventHandler { stopping = true; keepFansOnExit = (sig == SIGTERM) }
         src.resume()
         _ = Unmanaged.passRetained(src as AnyObject)
     }
@@ -140,7 +142,8 @@ func runGuard(config initial: Config, dryRun: Bool, interval: Double) throws {
             faultStreak = 0
             let t = s.controlTemp
             if let prev = smoothed {
-                smoothed = prev + (t - prev) * (t > prev ? config.smoothingUp : config.smoothingDown)
+                // 到 hot 以上就不平滑了，尖峰要立刻反應（閒段 → 重載一輪可以 +20°C）
+                smoothed = t >= config.hotTemp ? max(t, prev) : prev + (t - prev) * (t > prev ? config.smoothingUp : config.smoothingDown)
             } else { smoothed = t }
             let fmin = s.fans.first?.min ?? 0
             let fmax = s.fans.first?.max ?? 5000
@@ -173,7 +176,8 @@ func runGuard(config initial: Config, dryRun: Bool, interval: Double) throws {
             if let t = target, lastTarget >= 0 {
                 if config.maxRampDown > 0, t < lastTarget - config.maxRampDown { target = lastTarget - config.maxRampDown }
                 let boosting = boostUntil.map { $0 > Date() } ?? false
-                if config.maxRampUp > 0, !boosting, t > lastTarget + config.maxRampUp { target = lastTarget + config.maxRampUp }
+                let urgent = s.controlTemp >= config.hotTemp   // 已經 hot 就別慢慢升
+                if config.maxRampUp > 0, !boosting, !urgent, t > lastTarget + config.maxRampUp { target = lastTarget + config.maxRampUp }
             }
 
             if let target {
@@ -188,6 +192,8 @@ func runGuard(config initial: Config, dryRun: Bool, interval: Double) throws {
             }
         }
 
+        // 等級加遲滯（升級立即、降級要低於門檻 3°C），快照、統計、log 都用這個
+        s.level = config.level(for: s.controlTemp, previous: lastLevel)
         // 統計
         switch s.level {
         case .warm: stats.warmSeconds += interval
@@ -228,7 +234,11 @@ func runGuard(config initial: Config, dryRun: Bool, interval: Double) throws {
         if dryRun { stderr("\(s.short) → \(auto ? "auto" : "\(Int(lastTarget)) rpm")") }
         RunLoop.main.run(until: Date().addingTimeInterval(interval))
     }
-    restore()
+    if keepFansOnExit && !auto {
+        log("cool91 guard 結束（SIGTERM），風扇維持 \(Int(lastTarget)) rpm 等 launchd 重啟接管；要交還自動請 `sudo cool91 fan auto`")
+    } else {
+        restore()
+        log("cool91 guard 結束，風扇已交還自動")
+    }
     var s = Snapshot.take(config: config); s.guardRunning = false; s.stats = stats; s.save()
-    log("cool91 guard 結束，風扇已交還自動")
 }

@@ -58,3 +58,17 @@ final class ConfigTests: XCTestCase {
         XCTAssertNil(c.loadedFrom)
     }
 }
+
+final class LevelHysteresisTests: XCTestCase {
+    func testUpgradeImmediateDowngradeNeedsMargin() {
+        let c = Config()   // warm 80 / hot 95 / critical 100 / 遲滯 3
+        XCTAssertEqual(c.level(for: 81, previous: .ok), .warm)        // 升級立即
+        XCTAssertEqual(c.level(for: 79, previous: .warm), .warm)      // 79 還在 80−3 以上，維持 warm
+        XCTAssertEqual(c.level(for: 76.9, previous: .warm), .ok)      // 低於 77 才降
+        XCTAssertEqual(c.level(for: 96, previous: .warm), .hot)
+        XCTAssertEqual(c.level(for: 93, previous: .hot), .hot)
+        XCTAssertEqual(c.level(for: 91.9, previous: .hot), .warm)
+        XCTAssertEqual(c.level(for: 70, previous: .critical), .ok)    // 一次可以連降多級
+        XCTAssertEqual(c.level(for: 81, previous: nil), .warm)
+    }
+}

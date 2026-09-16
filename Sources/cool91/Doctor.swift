@@ -37,7 +37,8 @@ func runDoctor(config: Config) -> Bool {
     }
     check(FileManager.default.isWritableFile(atPath: Event.dir), "事件目錄", Event.dir + (FileManager.default.isWritableFile(atPath: Event.dir) ? " 可寫" : " 不存在或不可寫（guard 啟動時會建）"))
     if let f = s.fans.first {
-        check(!s.guardRunning || f.manual || s.guardTargetRPM == nil, "風扇控制權", f.manual ? "手動（guard 控制中）" : "自動", warnOnly: true)
+        if s.guardRunning { check(true, "風扇控制權", f.manual ? "手動（guard 控制中）" : "自動") }
+        else { check(!f.manual, "風扇控制權", f.manual ? String(format: "手動 %.0f rpm 但 guard 沒在跑（停在上次目標）；交還請 sudo cool91 fan auto", f.target) : "自動") }
     }
     check(FileManager.default.fileExists(atPath: "/Library/LaunchDaemons/com.cool91.guard.plist"), "LaunchDaemon", "/Library/LaunchDaemons/com.cool91.guard.plist")
     if let saved = Snapshot.load(), saved.guardRunning {
