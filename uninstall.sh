@@ -1,7 +1,7 @@
 #!/bin/bash
 set -uo pipefail
 sudo launchctl bootout system/com.cool91.guard 2>/dev/null
-sudo rm -rf /Library/LaunchDaemons/com.cool91.guard.plist /usr/local/bin/cool91 /etc/newsyslog.d/cool91.conf /tmp/cool91.json /tmp/cool91.history.json /tmp/cool91.events
+sudo rm -rf /Library/LaunchDaemons/com.cool91.guard.plist /usr/local/bin/cool91 /usr/local/bin/cool91-guard /etc/newsyslog.d/cool91.conf /tmp/cool91.json /tmp/cool91.history.json /tmp/cool91.events
 launchctl bootout "gui/$(id -u)/com.cool91.panel" 2>/dev/null
 rm -f "$HOME/Library/LaunchAgents/com.cool91.panel.plist"
 pkill -x cool91-panel 2>/dev/null

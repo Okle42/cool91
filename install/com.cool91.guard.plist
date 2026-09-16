@@ -5,7 +5,9 @@
   <key>Label</key><string>com.cool91.guard</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/usr/local/bin/cool91</string>
+    <!-- 走 symlink 啟動：「登入項目與延伸功能」顯示的是執行檔名，這樣會列成「cool91-guard」而不是和面板混淆的「cool91」
+         （AssociatedBundleIdentifiers 併到 app 底下需要同一個 Team ID，ad-hoc 簽章做不到） -->
+    <string>/usr/local/bin/cool91-guard</string>
     <string>guard</string>
   </array>
   <key>RunAtLoad</key><true/>

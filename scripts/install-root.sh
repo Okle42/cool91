@@ -8,6 +8,7 @@ cp "$SRC/.build/release/cool91" /usr/local/bin/cool91.new
 chmod 755 /usr/local/bin/cool91.new
 codesign --force --sign - /usr/local/bin/cool91.new 2>/dev/null || true
 mv -f /usr/local/bin/cool91.new /usr/local/bin/cool91
+ln -sf cool91 /usr/local/bin/cool91-guard   # daemon 用這個名字啟動，登入項目才分得清
 [ -f /etc/cool91/config.json ] || cp "$SRC/config.example.json" /etc/cool91/config.json
 # 設定檔交給使用者可寫，面板才能改模式/曲線；guard 偵測到修改會自動重載
 chown "$USER_NAME" /etc/cool91/config.json

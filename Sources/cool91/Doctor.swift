@@ -27,7 +27,7 @@ func runDoctor(config: Config) -> Bool {
     check(!s.fans.isEmpty, "風扇", s.fans.map { "F\($0.index) \(Int($0.min))–\(Int($0.max)) rpm" }.joined(separator: ", "))
 
     // 3. guard
-    let guardProc = pgrep("cool91 guard")
+    let guardProc = pgrep("cool91(-guard)? guard")
     check(guardProc, "guard 行程", guardProc ? "執行中" : "沒有在跑（sudo launchctl bootstrap system /Library/LaunchDaemons/com.cool91.guard.plist）")
     if let saved = Snapshot.load() {
         let age = Date().timeIntervalSince(saved.time)
