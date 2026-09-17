@@ -1,6 +1,6 @@
 # cool91 — Apple Silicon 風扇守門員，讓 AI 幫你工作時不燒機、不降頻
 
-> 仿 Macs Fan Control 的核心（讀溫度、自訂風扇曲線），但多了它做不到的事：
+> 讀溫度、自訂風扇曲線，加上一般風扇控制工具做不到的事：
 > **當 Claude Code 這類 AI agent 在你的 Mac 上跑重工作時，讓機器全力開工、風扇負責避免降頻；只有真的降頻了才讓工作等一下。**
 > 整套常駐 **0.3% CPU / 10 MB**（guard 0.1% + 頻率讀取 0.18%）。
 
@@ -18,19 +18,19 @@
 CPU 105°C   風扇 1774 rpm（macOS 自動）
 ```
 
-Mac mini M4 的預設風扇策略極度保守 —— **CPU 已經 100°C，風扇還在 1400 rpm 左右慢慢轉**，然後 P-core 靜靜地從 4.4 GHz 掉到 3.3–3.8 GHz，沒有任何提示。Macs Fan Control 可以手動拉高曲線，但它有三個問題：
+Mac mini M4 的預設風扇策略極度保守 —— **CPU 已經 100°C，風扇還在 1400 rpm 左右慢慢轉**，然後 P-core 靜靜地從 4.4 GHz 掉到 3.3–3.8 GHz，沒有任何提示。現有的風扇控制工具可以手動拉高曲線，但有三個問題：
 
 1. **純 GUI，沒有 CLI、沒有 API** —— AI agent 沒辦法問它「現在能不能開工」
 2. **不知道有沒有降頻** —— 它只管溫度，看不到硬體頻率，更不會在降頻時讓工作等一等
-3. **一個 Electron 級的常駐程式** —— 對於只想讀幾個 SMC key 的需求太重
+3. **都是 GUI 常駐程式** —— 對於只想讀幾個 SMC key 的需求太重
 
 我要的是：一個**能被程式呼叫**、**能接進 Claude Code hook**、**知道有沒有降頻**、**幾乎不佔資源**的風扇守門員。這就是 cool91。
 
 ## 優點
 
-| | cool91 | Macs Fan Control |
+| | cool91 | 一般風扇控制工具 |
 |---|---|---|
-| 自訂風扇曲線 | ✅ 曲線 / 固定 / 自動，面板可即時改，存檔即熱重載 | ✅（要重開） |
+| 自訂風扇曲線 | ✅ 曲線 / 固定 / 自動，面板可即時改，存檔即熱重載 | ✅ |
 | CPU + GPU 一起看 | ✅ 取兩者最高值決定風扇與把關 | ✅ |
 | 風扇不忽高忽低 | ✅ 升溫快反應、降溫慢放，每 5 秒最多降 300 rpm | 部分 |
 | **CPU 硬體頻率 / 熱降頻偵測** | ✅ P-core GHz、thermal pressure；降頻時面板 / statusline 標紅、log 記錄 | ❌ |
@@ -42,10 +42,10 @@ Mac mini M4 的預設風扇策略極度保守 —— **CPU 已經 100°C，風�
 | 每日統計 | ✅ 降頻秒數、hot / critical 秒數、hook 等待與擋下、預熱次數、最高溫 | ❌ |
 | 高負載下自己不會掛 | ✅ Standard 優先權 + watchdog；重啟時風扇維持不放手 | — |
 | 選單列顯示 | ✅ `🟡 82°`，點開有溫度 / 風扇 / 頻率三張 5 分鐘曲線圖 | ✅ |
-| 常駐負載 | **0.3% CPU / 10 MB**（實測） | 數十 MB |
-| 外部依賴 | **0**（純 Swift + 80 行 C，SwiftPM 直接 build） | 閉源 |
-| 新晶片（M5 / M6…） | 感測器動態掃描，改 config 前綴即可 | 等官方更新 |
-| 授權 | MIT | 閉源 |
+| 常駐負載 | **0.3% CPU / 10 MB**（實測） | 通常數十 MB |
+| 外部依賴 | **0**（純 Swift + 80 行 C，SwiftPM 直接 build） | 多為閉源 |
+| 新晶片（M5 / M6…） | 感測器動態掃描，改 config 前綴即可 | 等作者更新 |
+| 授權 | MIT | 多為閉源 |
 
 ## 架構
 
@@ -97,7 +97,7 @@ guard 沒跑、拿不到 pressure 時退回溫度門檻：≥ 95°C 等、≥ 10
 
 ## 安裝
 
-需要 Xcode Command Line Tools（有 `swiftc` 即可）。先退出 Macs Fan Control（含選單列常駐），兩者會互搶風扇。
+需要 Xcode Command Line Tools（有 `swiftc` 即可）。先退出其他風扇控制程式（如 Macs Fan Control，含選單列常駐），兩者會互搶風扇。
 
 ```bash
 git clone https://github.com/Okle42/cool91.git
@@ -209,7 +209,7 @@ Claude Code 的 `!` 指令跑 `sudo` 會直接失敗（`a terminal is required t
 **7. hook 逾時**
 Claude Code hook 預設 60 秒逾時，而等待上限是 90 秒 —— hook 設定要明確給 `"timeout": 150`，程式內也把等待夾在 120 秒以下，`doctor` 會檢查兩邊對不對得上。
 
-**8. 和 Macs Fan Control 互搶**
+**8. 和其他風扇控制程式互搶**
 兩個程式同時寫 `F0Tg` 會互相蓋掉。`install.sh` 偵測到 Macs Fan Control 還在跑（含關掉視窗後的選單列常駐）就拒絕安裝。
 
 **9. 設定檔寫到一半被 guard 讀到**
