@@ -42,7 +42,7 @@ final class Monitor {
     private var localHistory: [HistoryPoint] = []   // guard 沒跑時自己取樣的備援
 
     // 提示音：進入過熱 / 降頻響「熱」、回到正常響「冷」。開關存 UserDefaults（面板本地）；
-    // 音效檔三層：config 的 sounds.overheat / cooldown → app 內建 Sounds/overheat.mp3、cooldown.mp3 → 系統音
+    // 音效檔三層：config 的 sounds.overheat / cooldown → app 內建 Sounds/overheat.m4a、cooldown.m4a → 系統音
     static let hotSound = "Basso", coldSound = "Glass"
     var hotSoundOn: Bool { didSet { UserDefaults.standard.set(hotSoundOn, forKey: "sound.hot") } }
     var coldSoundOn: Bool { didSet { UserDefaults.standard.set(coldSoundOn, forKey: "sound.cold") } }
@@ -157,7 +157,10 @@ final class Monitor {
             let path = NSString(string: raw).expandingTildeInPath
             if FileManager.default.fileExists(atPath: path) { return path }
         }
-        return Bundle.main.path(forResource: hot ? "overheat" : "cooldown", ofType: "mp3", inDirectory: "Sounds")
+        for ext in ["m4a", "mp3", "aiff", "wav"] {
+            if let p = Bundle.main.path(forResource: hot ? "overheat" : "cooldown", ofType: ext, inDirectory: "Sounds") { return p }
+        }
+        return nil
     }
 
     /// 面板上編輯提示音門檻：draft.sounds 缺席時先建一個，其他欄位保留

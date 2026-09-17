@@ -12,7 +12,7 @@ mkdir -p "$APP/Contents/MacOS"
 cp "$BIN" "$APP/Contents/MacOS/cool91-panel"
 # 內建提示音（config 沒指定音檔時用）
 mkdir -p "$APP/Contents/Resources/Sounds"
-cp Sounds/*.mp3 "$APP/Contents/Resources/Sounds/"
+cp Sounds/*.m4a "$APP/Contents/Resources/Sounds/"
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

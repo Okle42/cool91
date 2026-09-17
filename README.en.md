@@ -239,8 +239,8 @@ Tests/Cool91CoreTests/  unit tests: curve interpolation, thresholds, config pars
 install/                LaunchDaemon plist, newsyslog config, Claude Code hook snippet
 scripts/                install-root.sh (root steps), install-hook.py, install-mcp.sh, make-app.sh (panel bundle)
 mcp/                    cool91_mcp.py: MCP server (PEP 723 single file, uv run --script)
-Sounds/                 bundled chimes overheat.mp3 / cooldown.mp3 (packed into the panel app)
-extras/                 statusline snippet, perf_vs_temp.py (efficiency vs temperature measurement)
+Sounds/                 bundled chimes overheat.m4a / cooldown.m4a (synthesised, packed into the panel app)
+extras/                 statusline snippet, perf_vs_temp.py (efficiency vs temperature), make_sounds.py (chime synthesis)
 docs/                   A/B test data
 ```
 

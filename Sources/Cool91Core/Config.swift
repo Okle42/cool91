@@ -53,7 +53,7 @@ public struct Config: Codable {
     public var cpuPrefixes: [String] = ["Tp", "Te"]
     public var gpuPrefixes: [String] = ["Tg"]
 
-    /// 面板提示音。音檔缺席用面板內建的 Sounds/overheat.mp3、cooldown.mp3，再沒有才退回系統音。
+    /// 面板提示音。音檔缺席用面板內建的 Sounds/overheat.m4a、cooldown.m4a，再沒有才退回系統音。
     /// 門檻獨立於 hotTemp / levelHysteresis：hook 要「工作優先」可以把 hotTemp 拉到 98，
     /// 提示音仍可在 95 就先叫、等真的涼到 85 再報回穩，兩者不該綁在一起
     public struct Sounds: Codable {

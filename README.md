@@ -281,8 +281,8 @@ Tests/Cool91CoreTests/  單元測試：曲線插值、門檻、設定解析與�
 install/                LaunchDaemon plist、newsyslog 設定、Claude Code hook 片段
 scripts/                install-root.sh（root 步驟）、install-hook.py、install-mcp.sh、make-app.sh（打包面板）
 mcp/                    cool91_mcp.py：MCP server（PEP 723 單檔，uv run --script 即跑）
-Sounds/                 內建提示音 overheat.mp3 / cooldown.mp3（打包進面板 app）
-extras/                 statusline 片段、perf_vs_temp.py（效率 vs 溫度量測）
+Sounds/                 內建提示音 overheat.m4a / cooldown.m4a（合成音，打包進面板 app）
+extras/                 statusline 片段、perf_vs_temp.py（效率 vs 溫度量測）、make_sounds.py（合成提示音）
 docs/                   A/B 實測資料
 ```
 
