@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.5 — 2026-09-17
+
+- **面板提示音**：進入 hot / critical 或 CPU / GPU 開始降頻響「熱」（Basso），回到正常響「冷」（Glass）。兩個獨立開關 + ▶ 試聽，開關存面板自己的 UserDefaults（即時生效）。只在冷 ↔ 熱的邊緣響、20 秒內不連響，門檻上下抖動不會一直叫
+- config 新增 `sounds.critical` / `sounds.coolDown`（mp3 / aiff 路徑，可用 `~`）可換成自己的音檔；缺席或檔案不在就用系統音。面板「套用」整份重寫設定檔，這個欄位有進 CodingKeys 不會被洗掉（有測試）
+- `sounds.coolDownBelow`：「降溫回穩」的獨立門檻（控制溫度降到這以下才響），缺席用 hotTemp − levelHysteresis。hook 要「工作優先」把 hotTemp 拉到 98 時，提示音還是可以等真的涼到 85 再響。一趟過熱只響兩聲：進入 hot 響「熱」上鎖，降到門檻響「冷」解鎖，中間在門檻上下抖動不叫
+- 面板閒置時也會看設定檔 mtime 重載（只 stat 一次），別的 session / 手動改的門檻與音檔即時生效
+
 ## 0.2.4 — 2026-09-17
 
 - **MCP server**（`mcp/cool91_mcp.py`）：7 個 tool 讓 AI 主動查狀態、判斷可否開工、等降溫、看誰在吃 CPU、讀設定、切風扇模式。Python + `mcp>=2` 單檔（PEP 723），`uv run --script` 即跑；`install.sh` 自動 `claude mcp add --scope user`，`uninstall.sh` 移除

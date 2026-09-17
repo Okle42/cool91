@@ -72,3 +72,27 @@ final class LevelHysteresisTests: XCTestCase {
         XCTAssertEqual(c.level(for: 81, previous: nil), .warm)
     }
 }
+
+// 面板提示音：sounds 缺席 = nil；有設就 save/load 往返不丟（面板按「套用」整份重寫，漏掉會把使用者設的音檔洗掉）
+final class ConfigSoundsTests: XCTestCase {
+    func testSoundsAbsentIsNil() throws {
+        let c = try JSONDecoder().decode(Config.self, from: Data("{}".utf8))
+        XCTAssertNil(c.sounds)
+        XCTAssertFalse(String(data: try JSONEncoder().encode(c), encoding: .utf8)!.contains("sounds"))
+    }
+    func testSoundsRoundTrip() throws {
+        let json = #"{"sounds":{"critical":"~/a.mp3","coolDown":"/b.mp3","coolDownBelow":85}}"#
+        let c = try JSONDecoder().decode(Config.self, from: Data(json.utf8))
+        XCTAssertEqual(c.sounds?.critical, "~/a.mp3")
+        XCTAssertEqual(c.sounds?.coolDown, "/b.mp3")
+        XCTAssertEqual(c.coolDownBelow, 85)
+        let back = try JSONDecoder().decode(Config.self, from: try JSONEncoder().encode(c))
+        XCTAssertEqual(back.sounds?.coolDown, "/b.mp3")
+        XCTAssertEqual(back.sounds?.coolDownBelow, 85)
+    }
+    /// 沒設 coolDownBelow 就退回 hotTemp − levelHysteresis，和等級降級同步
+    func testCoolDownBelowDefault() throws {
+        let c = try JSONDecoder().decode(Config.self, from: Data(#"{"hotTemp":98,"levelHysteresis":3}"#.utf8))
+        XCTAssertEqual(c.coolDownBelow, 95)
+    }
+}

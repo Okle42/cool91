@@ -61,5 +61,10 @@
   ],
   "gpuPrefixes": [
     "Tg"
-  ]
+  ],
+  "sounds": {
+    "critical": null,
+    "coolDown": null,
+    "coolDownBelow": null
+  }
 }

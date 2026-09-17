@@ -41,7 +41,20 @@ final class Monitor {
     private var timer: Timer?
     private var localHistory: [HistoryPoint] = []   // guard 沒跑時自己取樣的備援
 
+    // 提示音：進入過熱 / 降頻響「熱」、回到正常響「冷」。開關存 UserDefaults（面板本地）；
+    // 音效檔看 config 的 sounds.critical / sounds.coolDown，沒設才用系統音
+    static let hotSound = "Basso", coldSound = "Glass"
+    var hotSoundOn: Bool { didSet { UserDefaults.standard.set(hotSoundOn, forKey: "sound.hot") } }
+    var coldSoundOn: Bool { didSet { UserDefaults.standard.set(coldSoundOn, forKey: "sound.cold") } }
+    @ObservationIgnored private var wasHot: Bool? = nil          // 上一輪是不是熱的；nil = 還沒取樣，第一輪不響
+    @ObservationIgnored private var awaitingCool = false         // 響過「熱」之後上鎖，等降到 coolDownBelow 響「冷」才解鎖
+    @ObservationIgnored private var lastSound = Date.distantPast
+    @ObservationIgnored private var configMtime: Date? = nil
+    @ObservationIgnored private var playing: NSSound? = nil   // 抓住正在播的，不然 mp3 播到一半被釋放
+
     init() {
+        hotSoundOn = UserDefaults.standard.object(forKey: "sound.hot") as? Bool ?? true
+        coldSoundOn = UserDefaults.standard.object(forKey: "sound.cold") as? Bool ?? true
         try? SMC.open()
         tick()
         schedule()
@@ -65,9 +78,13 @@ final class Monitor {
     }
 
     func tick() {
+        // 設定檔被改了（另一個 session、手動編輯）就跟上，門檻和音檔才會即時生效；只 stat 一次，閒置也做
+        let m = Config.mtime(config.loadedFrom)
+        if m != configMtime { configMtime = m; reloadConfig() }
         // guard 在跑：只讀快照檔；沒跑才自己開 SMC
         let s = Snapshot.takeFast(config: config)
         snapshot = s
+        checkSound(s)
         let open = windowVisible
         if open != panelOpen { panelOpen = open; return }   // didSet 會再叫一次 tick
         guard panelOpen else { return }
@@ -78,6 +95,41 @@ final class Monitor {
             localHistory.removeAll { Date().timeIntervalSince($0.time) > History.keep }
             history = localHistory
         }
+    }
+
+    /// 一趟「過熱 → 涼了」只響兩聲：進入 hot / 降頻的瞬間響「熱」並上鎖；之後不熱了且控制溫度降到 coolDownBelow
+    /// 以下才響「冷」並解鎖。中間在 hot 門檻上下抖動（98 ↔ 96）不會再叫；20 秒內也不連響
+    private func checkSound(_ s: Snapshot) {
+        let hot = s.level >= .hot || s.throttling || s.gpuThrottling
+        defer { wasHot = hot }
+        guard let was = wasHot else { return }
+        if hot, !was, !awaitingCool {
+            awaitingCool = true
+            if hotSoundOn, Date().timeIntervalSince(lastSound) > 20 { play(hot: true) }
+        }
+        if !hot, awaitingCool, s.controlTemp < config.coolDownBelow {
+            awaitingCool = false
+            if coldSoundOn, Date().timeIntervalSince(lastSound) > 20 { play(hot: false) }
+        }
+    }
+
+    /// config 有指定音檔就播它（現讀一次設定檔，改了不用重開面板），沒有或檔案不在就退回系統音
+    func play(hot: Bool) {
+        playing?.stop()
+        if let path = customSoundPath(hot: hot), let snd = NSSound(contentsOfFile: path, byReference: true) {
+            playing = snd
+        } else {
+            playing = NSSound(named: hot ? Self.hotSound : Self.coldSound)
+        }
+        playing?.play()
+        lastSound = Date()
+    }
+
+    func customSoundPath(hot: Bool) -> String? {
+        let snd = Config.load(path: nil).sounds
+        guard let raw = hot ? snd?.critical : snd?.coolDown, !raw.isEmpty else { return nil }
+        let path = NSString(string: raw).expandingTildeInPath
+        return FileManager.default.fileExists(atPath: path) ? path : nil
     }
 
     /// 外部（手動編輯、另一台面板）改了設定檔也跟上
@@ -218,6 +270,7 @@ struct PanelView: View {
                 timeAxis
                 statsRow(s)
                 controls(s)
+                soundRow
                 footer
             } else {
                 Text("讀取 SMC 中…").padding()
@@ -620,6 +673,34 @@ struct PanelView: View {
         } }
         .chartPlotStyle { $0.background(Neon.plotBG).clipShape(RoundedRectangle(cornerRadius: 6)) }
         .frame(height: 100)
+    }
+
+    /// 提示音開關：熱 / 冷各自獨立，旁邊 ▶ 可試聽。即時生效，不用套用
+    var soundRow: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "speaker.wave.2.fill").font(.caption2).foregroundStyle(.secondary)
+            Text("提示音").font(.caption2).foregroundStyle(.secondary)
+            soundToggle("過熱 / 降頻", Neon.red, isOn: Binding(get: { monitor.hotSoundOn }, set: { monitor.hotSoundOn = $0 }), hot: true)
+            soundToggle("降溫回穩", Neon.green, isOn: Binding(get: { monitor.coldSoundOn }, set: { monitor.coldSoundOn = $0 }), hot: false)
+            Spacer()
+        }
+        .padding(.horizontal, 10).padding(.vertical, 6)
+        .background(Neon.cardBG)
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+
+    func soundToggle(_ title: String, _ color: Color, isOn: Binding<Bool>, hot: Bool) -> some View {
+        let custom = monitor.customSoundPath(hot: hot)
+        return HStack(spacing: 2) {
+            Toggle(isOn: isOn) { Text(title).font(.caption2).foregroundStyle(isOn.wrappedValue ? color : .secondary) }
+                .toggleStyle(.checkbox).controlSize(.mini)
+            Button { monitor.play(hot: hot) } label: {
+                Image(systemName: "play.circle").font(.caption2).foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("試聽：" + (custom.map { ($0 as NSString).lastPathComponent } ?? "系統音 \(hot ? Monitor.hotSound : Monitor.coldSound)")
+                  + (hot ? "" : String(format: "（降到 %.0f°C 以下才響）", monitor.config.coolDownBelow)))
+        }
     }
 
     var footer: some View {

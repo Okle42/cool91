@@ -53,6 +53,21 @@ public struct Config: Codable {
     public var cpuPrefixes: [String] = ["Tp", "Te"]
     public var gpuPrefixes: [String] = ["Tg"]
 
+    /// 面板提示音：critical / coolDown 是音檔路徑（mp3/aiff，可用 ~，缺席用系統音）；
+    /// coolDownBelow 是「降溫回穩」的獨立門檻（控制溫度降到這以下才響），缺席用 hotTemp − levelHysteresis。
+    /// 獨立出來是因為 hook 要「工作優先」門檻拉高（hotTemp 98），但提示音想等真的涼了（85）再響，兩者不該綁在一起
+    public struct Sounds: Codable {
+        public var critical: String? = nil
+        public var coolDown: String? = nil
+        public var coolDownBelow: Double? = nil
+        public init(critical: String? = nil, coolDown: String? = nil, coolDownBelow: Double? = nil) {
+            self.critical = critical; self.coolDown = coolDown; self.coolDownBelow = coolDownBelow
+        }
+    }
+    public var sounds: Sounds? = nil
+    /// 提示音「降溫回穩」門檻
+    public var coolDownBelow: Double { sounds?.coolDownBelow ?? (hotTemp - levelHysteresis) }
+
     public static let defaultPaths = [
         "/etc/cool91/config.json",
         NSString(string: "~/.config/cool91/config.json").expandingTildeInPath,
@@ -64,7 +79,7 @@ public struct Config: Codable {
     enum CodingKeys: String, CodingKey {
         case curve, mode, fixedRPM, interval, deadband, smoothingUp, smoothingDown, maxRampDown, maxRampUp, rampDownHoldRounds, levelHysteresis, includeGPU,
              warmTemp, hotTemp, criticalTemp, hookWaitSeconds, hookBlockOnCritical, hookAllowCommands,
-             boostCommands, boostRPM, boostSeconds, cpuPrefixes, gpuPrefixes
+             boostCommands, boostRPM, boostSeconds, cpuPrefixes, gpuPrefixes, sounds
     }
 
     public init(from d: Decoder) throws {
@@ -92,6 +107,7 @@ public struct Config: Codable {
         boostSeconds = try c.decodeIfPresent(Double.self, forKey: .boostSeconds) ?? boostSeconds
         cpuPrefixes = try c.decodeIfPresent([String].self, forKey: .cpuPrefixes) ?? cpuPrefixes
         gpuPrefixes = try c.decodeIfPresent([String].self, forKey: .gpuPrefixes) ?? gpuPrefixes
+        sounds = try c.decodeIfPresent(Sounds.self, forKey: .sounds)
         try validate()
     }
 
