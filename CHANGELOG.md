@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.4 — 2026-09-17
+
+- **MCP server**（`mcp/cool91_mcp.py`）：7 個 tool 讓 AI 主動查狀態、判斷可否開工、等降溫、看誰在吃 CPU、讀設定、切風扇模式。Python + `mcp>=2` 單檔（PEP 723），`uv run --script` 即跑；`install.sh` 自動 `claude mcp add --scope user`，`uninstall.sh` 移除
+- `cool91_set_fan` 和面板一樣走「寫 config → guard 熱重載」，不碰 SMC、不需 sudo；rpm 夾在風扇 min–max，guard 沒跑回警告
+- 錯誤一律 `ToolError`（mcp 2.x 其他例外只會給 AI 看到「Error executing tool」）
+
 ## 0.2.3 — 2026-09-16
 
 從 11 小時 log 分析後的調整：

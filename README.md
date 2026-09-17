@@ -66,6 +66,9 @@ Sources/Cool91Core    Swift library：型別解碼、感測器掃描、風扇曲
    │     ├─ hook    Claude Code PreToolUse(Bash) 入口 —— 只讀快照檔，9 ms；重指令丟預熱事件
    │     └─ status / check / wait / fan / sensors / chip / doctor
    │
+   ├─► mcp/cool91_mcp.py   MCP server（Python，stdio）：把上面的 CLI 包成 7 個 tool 給 AI 主動呼叫
+   │                      set_fan 走「寫 config → guard 熱重載」，和面板同一條路，不需 root
+   │
    └─► cool91-panel   選單列 .app（使用者層級，不需 root）
                       閒置只讀快照更新標題；打開才讀歷史檔畫圖
                       改模式 / 曲線 → 寫 config → guard 偵測 mtime 熱重載
@@ -99,11 +102,13 @@ guard 沒跑、拿不到 pressure 時退回溫度門檻：≥ 95°C 等、≥ 10
 ```bash
 git clone https://github.com/Okle42/cool91.git
 cd cool91
-./install.sh     # build → CLI → guard LaunchDaemon（跳系統密碼視窗）→ Claude Code hook → 選單列面板
+./install.sh     # build → CLI → guard LaunchDaemon（跳系統密碼視窗）→ Claude Code hook + MCP → 選單列面板
 cool91 doctor    # 15 項檢查全綠就對了
 ```
 
 移除：`./uninstall.sh`（風扇交還 macOS，設定檔保留）。
+
+MCP server 需要 [`uv`](https://docs.astral.sh/uv/)（自動抓 `mcp` 套件到隔離環境，不碰系統 Python）；沒有 `uv` 或 `claude` CLI 時 install.sh 會略過這一步，其他功能不受影響。
 
 ## 使用
 
@@ -125,6 +130,20 @@ tail -f /var/log/cool91.log
 **設定檔** `/etc/cool91/config.json`（範例見 `config.example.json`）：曲線、門檻、平滑係數、降速斜率、GPU 是否納入、白名單、預熱關鍵字、感測器前綴都在這。改了不用重啟，解析失敗會保留上一份。
 
 **log** `/var/log/cool91.log`：帶時間戳，只記「寫了 SMC」「等級變化」「降頻開始 / 結束」「設定重載」「預熱」「感測器異常」，不會每輪一行；超過 1 MB 由 newsyslog 輪替（`/etc/newsyslog.d/cool91.conf`）。
+
+**Claude Code MCP**（`claude mcp list` 應看到 `cool91: ✔ Connected`）。hook 是被動閘門，MCP 是讓 AI 主動看得到、動得了：
+
+| tool | 對應 CLI | 說明 |
+|---|---|---|
+| `cool91_status` | `status --json` | 溫度 / 風扇 / 頻率 / 等級 / pressure / 今日統計 / 誰在吃 CPU（去掉感測器 key 清單省 token） |
+| `cool91_check` | `check --json` | 多一個 `verdict: ok / wait / block`，開重負載前先問 |
+| `cool91_top` | `top` | 現在誰在算 |
+| `cool91_doctor` | `doctor` | 排障 |
+| `cool91_wait` | `wait` | 等降頻結束或 `below_temp`，timeout 上限 300 秒 |
+| `cool91_get_config` | — | 讀設定檔 |
+| `cool91_set_fan` | — | `mode=curve / fixed(rpm) / auto`；寫設定檔讓 guard 熱重載，rpm 夾在風扇 min–max，guard 沒跑會警告 |
+
+`cool91_set_fan` 故意不呼叫 `sudo cool91 fan`：guard 每 5 秒會把 SMC 寫回曲線值，直接寫 SMC 只會被蓋掉，而且 AI 不該拿 sudo。手動註冊：`./scripts/install-mcp.sh`。
 
 **Claude Code 狀態列**（選用）：`extras/statusline_snippet.py` 讀 `/tmp/cool91.json` 顯示 `🌡85°🌀4896⚡3.9G`（降頻時 ⚡ 變紅加 ↓），guard 沒在跑就自動隱藏。
 
@@ -240,7 +259,8 @@ Sources/cool91/         CLI：main（分派）、Hook、Guard、Doctor
 Sources/cool91-panel/   選單列面板（SwiftUI + Charts）
 Tests/Cool91CoreTests/  單元測試：曲線插值、門檻、設定解析與驗證、白名單、預熱、把關判斷、舊快照相容、powermetrics 解析
 install/                LaunchDaemon plist、newsyslog 設定、Claude Code hook 片段
-scripts/                install-root.sh（root 步驟）、install-hook.py、make-app.sh（打包面板）
+scripts/                install-root.sh（root 步驟）、install-hook.py、install-mcp.sh、make-app.sh（打包面板）
+mcp/                    cool91_mcp.py：MCP server（PEP 723 單檔，uv run --script 即跑）
 extras/                 statusline 片段
 docs/                   A/B 實測資料
 ```

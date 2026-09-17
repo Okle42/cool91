@@ -7,6 +7,7 @@ launchctl bootout "gui/$(id -u)/com.cool91.panel" 2>/dev/null
 rm -f "$HOME/Library/LaunchAgents/com.cool91.panel.plist"
 pkill -x cool91-panel 2>/dev/null
 rm -rf "/Applications/cool91 Panel.app"
+command -v claude >/dev/null && claude mcp remove --scope user cool91 >/dev/null 2>&1 && echo "已移除 Claude Code MCP server"
 python3 - <<'PY'
 import json, os
 p = os.path.expanduser("~/.claude/settings.json")

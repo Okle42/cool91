@@ -1,5 +1,5 @@
 #!/bin/bash
-# 一鍵安裝：release 建置 → CLI → 設定檔 → guard LaunchDaemon(root) → Claude Code hook → 選單列面板
+# 一鍵安裝：release 建置 → CLI → 設定檔 → guard LaunchDaemon(root) → Claude Code hook + MCP → 選單列面板
 # root 步驟走 macOS 系統密碼視窗，所以在沒有 TTY 的環境（Claude Code 的 ! 指令）也能跑
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -26,6 +26,9 @@ sleep 3
 
 echo "▶ Claude Code hook"
 ./scripts/install-hook.py
+
+echo "▶ Claude Code MCP server"
+./scripts/install-mcp.sh
 
 echo "▶ 選單列面板"
 ./scripts/make-app.sh
