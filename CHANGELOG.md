@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.0 — 2026-09-18
+
+重整版：提示音進專案、門檻可在面板調、各感測器看得到。
+
+- **內建提示音**：`Sounds/overheat.mp3`（過熱 / 降頻）、`Sounds/cooldown.mp3`（降溫回穩）隨面板打包進 app bundle，裝好就有聲音。config 的 `sounds.overheat` / `sounds.cooldown` 可覆蓋成自己的音檔，缺席用內建，內建也不在才退回系統音
+- **提示音門檻面板可調**：提示音卡每列多一個 Stepper，`sounds.overheatAbove`（≥ 此溫度響「熱」，缺席 = hotTemp）/ `sounds.cooldownBelow`（< 此溫度響「冷」，缺席 = hotTemp − levelHysteresis），按「套用」寫進 config。兩個門檻互相夾住，回穩不會高於過熱（validate 也擋）。CPU / GPU 降頻不看溫度一律算過熱
+- **各感測器熱度格**：溫度卡下方「各感測器」展開，P-core / E-core / GPU 三組，一格一個 SMC 感測器（M4 共 73 個），顏色隨溫度 40 藍 → 60 綠 → 80 琥珀 → 95 紅，滑過看 key 與度數，每組附最熱 / 平均。只有展開時才讀，收合零成本；展開狀態實測面板 CPU 0.0%
+- **套用列改成全域**：風扇卡與提示音卡任一有改動，面板底部出現一條「還原 / 套用」，各卡標題只標自己的「未套用」
+- 底部多一顆「重啟」（LaunchAgent 管的用 `launchctl kickstart -k`，不是的就 `open` 自己）；版本號改讀 bundle
+- config `sounds` 的 key 從 `critical` / `coolDown` / `coolDownBelow` 改名 `overheat` / `cooldown` / `cooldownBelow`（0.2.5 只活了一天，直接改不留相容）
+- `extras/perf_vs_temp.py`：固定風扇轉速跑 sha256 到穩態、powermetrics 量功率，算 ops/J 的實驗腳本，拿來量「幾度效率最好」
+
 ## 0.2.5 — 2026-09-17
 
 - **面板提示音**：進入 hot / critical 或 CPU / GPU 開始降頻響「熱」（Basso），回到正常響「冷」（Glass）。兩個獨立開關 + ▶ 試聽，開關存面板自己的 UserDefaults（即時生效）。只在冷 ↔ 熱的邊緣響、20 秒內不連響，門檻上下抖動不會一直叫

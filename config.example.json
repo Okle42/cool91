@@ -1,11 +1,26 @@
 {
   "mode": "curve",
   "curve": [
-    { "temp": 60, "rpm": 1000 },
-    { "temp": 75, "rpm": 1800 },
-    { "temp": 85, "rpm": 2600 },
-    { "temp": 92, "rpm": 3600 },
-    { "temp": 97, "rpm": 4900 }
+    {
+      "temp": 60,
+      "rpm": 1000
+    },
+    {
+      "temp": 75,
+      "rpm": 1800
+    },
+    {
+      "temp": 85,
+      "rpm": 2600
+    },
+    {
+      "temp": 92,
+      "rpm": 3600
+    },
+    {
+      "temp": 97,
+      "rpm": 4900
+    }
   ],
   "fixedRPM": 3000,
   "interval": 5,
@@ -63,8 +78,9 @@
     "Tg"
   ],
   "sounds": {
-    "critical": null,
-    "coolDown": null,
-    "coolDownBelow": null
+    "overheat": null,
+    "overheatAbove": null,
+    "cooldown": null,
+    "cooldownBelow": null
   }
 }

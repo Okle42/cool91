@@ -81,18 +81,25 @@ final class ConfigSoundsTests: XCTestCase {
         XCTAssertFalse(String(data: try JSONEncoder().encode(c), encoding: .utf8)!.contains("sounds"))
     }
     func testSoundsRoundTrip() throws {
-        let json = #"{"sounds":{"critical":"~/a.mp3","coolDown":"/b.mp3","coolDownBelow":85}}"#
+        let json = #"{"sounds":{"overheat":"~/a.mp3","overheatAbove":95,"cooldown":"/b.mp3","cooldownBelow":85}}"#
         let c = try JSONDecoder().decode(Config.self, from: Data(json.utf8))
-        XCTAssertEqual(c.sounds?.critical, "~/a.mp3")
-        XCTAssertEqual(c.sounds?.coolDown, "/b.mp3")
-        XCTAssertEqual(c.coolDownBelow, 85)
+        XCTAssertEqual(c.sounds?.overheat, "~/a.mp3")
+        XCTAssertEqual(c.sounds?.cooldown, "/b.mp3")
+        XCTAssertEqual(c.overheatAbove, 95)
+        XCTAssertEqual(c.cooldownBelow, 85)
         let back = try JSONDecoder().decode(Config.self, from: try JSONEncoder().encode(c))
-        XCTAssertEqual(back.sounds?.coolDown, "/b.mp3")
-        XCTAssertEqual(back.sounds?.coolDownBelow, 85)
+        XCTAssertEqual(back.sounds?.cooldown, "/b.mp3")
+        XCTAssertEqual(back.sounds?.overheatAbove, 95)
+        XCTAssertEqual(back.sounds?.cooldownBelow, 85)
     }
-    /// 沒設 coolDownBelow 就退回 hotTemp − levelHysteresis，和等級降級同步
-    func testCoolDownBelowDefault() throws {
+    /// 沒設門檻就跟 hook 的 hotTemp 走：過熱 = hotTemp，回穩 = hotTemp − levelHysteresis
+    func testSoundThresholdDefaults() throws {
         let c = try JSONDecoder().decode(Config.self, from: Data(#"{"hotTemp":98,"levelHysteresis":3}"#.utf8))
-        XCTAssertEqual(c.coolDownBelow, 95)
+        XCTAssertEqual(c.overheatAbove, 98)
+        XCTAssertEqual(c.cooldownBelow, 95)
+    }
+    /// 回穩門檻不能高於過熱門檻，否則一過熱就立刻報回穩
+    func testSoundThresholdOrderRejected() {
+        XCTAssertThrowsError(try JSONDecoder().decode(Config.self, from: Data(#"{"sounds":{"overheatAbove":85,"cooldownBelow":90}}"#.utf8)))
     }
 }

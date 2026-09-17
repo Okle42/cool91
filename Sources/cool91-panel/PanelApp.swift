@@ -42,20 +42,25 @@ final class Monitor {
     private var localHistory: [HistoryPoint] = []   // guard 沒跑時自己取樣的備援
 
     // 提示音：進入過熱 / 降頻響「熱」、回到正常響「冷」。開關存 UserDefaults（面板本地）；
-    // 音效檔看 config 的 sounds.critical / sounds.coolDown，沒設才用系統音
+    // 音效檔三層：config 的 sounds.overheat / cooldown → app 內建 Sounds/overheat.mp3、cooldown.mp3 → 系統音
     static let hotSound = "Basso", coldSound = "Glass"
     var hotSoundOn: Bool { didSet { UserDefaults.standard.set(hotSoundOn, forKey: "sound.hot") } }
     var coldSoundOn: Bool { didSet { UserDefaults.standard.set(coldSoundOn, forKey: "sound.cold") } }
     @ObservationIgnored private var wasHot: Bool? = nil          // 上一輪是不是熱的；nil = 還沒取樣，第一輪不響
-    @ObservationIgnored private var awaitingCool = false         // 響過「熱」之後上鎖，等降到 coolDownBelow 響「冷」才解鎖
+    @ObservationIgnored private var awaitingCool = false         // 響過「熱」之後上鎖，等降到 cooldownBelow 響「冷」才解鎖
     @ObservationIgnored private var lastSound = Date.distantPast
     @ObservationIgnored private var configMtime: Date? = nil
     @ObservationIgnored private var playing: NSSound? = nil   // 抓住正在播的，不然 mp3 播到一半被釋放
 
+    // 各感測器明細：只有面板展開「各感測器」時才每輪讀 73 個 key，收合不花這個成本
+    var showSensors: Bool { didSet { UserDefaults.standard.set(showSensors, forKey: "sensors.show"); if showSensors { readSensors() } } }
+    var sensorTemps: [String: Double] = [:]
+
     init() {
         hotSoundOn = UserDefaults.standard.object(forKey: "sound.hot") as? Bool ?? true
         coldSoundOn = UserDefaults.standard.object(forKey: "sound.cold") as? Bool ?? true
-        try? SMC.open()
+        showSensors = UserDefaults.standard.bool(forKey: "sensors.show")
+        smcOpened = (try? SMC.open()) != nil
         tick()
         schedule()
     }
@@ -88,6 +93,7 @@ final class Monitor {
         let open = windowVisible
         if open != panelOpen { panelOpen = open; return }   // didSet 會再叫一次 tick
         guard panelOpen else { return }
+        if showSensors { readSensors() }
         if s.guardRunning {
             history = History.load()
         } else {
@@ -97,26 +103,26 @@ final class Monitor {
         }
     }
 
-    /// 一趟「過熱 → 涼了」只響兩聲：進入 hot / 降頻的瞬間響「熱」並上鎖；之後不熱了且控制溫度降到 coolDownBelow
-    /// 以下才響「冷」並解鎖。中間在 hot 門檻上下抖動（98 ↔ 96）不會再叫；20 秒內也不連響
+    /// 一趟「過熱 → 涼了」只響兩聲：控制溫度 ≥ overheatAbove（或 CPU / GPU 降頻、或到 critical）的瞬間響「熱」並上鎖；
+    /// 之後不熱了且控制溫度降到 cooldownBelow 以下才響「冷」並解鎖。中間在門檻上下抖動不會再叫；20 秒內也不連響
     private func checkSound(_ s: Snapshot) {
-        let hot = s.level >= .hot || s.throttling || s.gpuThrottling
+        let hot = s.controlTemp >= config.overheatAbove || s.level == .critical || s.throttling || s.gpuThrottling
         defer { wasHot = hot }
         guard let was = wasHot else { return }
         if hot, !was, !awaitingCool {
             awaitingCool = true
             if hotSoundOn, Date().timeIntervalSince(lastSound) > 20 { play(hot: true) }
         }
-        if !hot, awaitingCool, s.controlTemp < config.coolDownBelow {
+        if !hot, awaitingCool, s.controlTemp < config.cooldownBelow {
             awaitingCool = false
             if coldSoundOn, Date().timeIntervalSince(lastSound) > 20 { play(hot: false) }
         }
     }
 
-    /// config 有指定音檔就播它（現讀一次設定檔，改了不用重開面板），沒有或檔案不在就退回系統音
+    /// config 有指定音檔就播它（現讀一次設定檔，改了不用重開面板），沒有就用 app 內建的，再沒有退回系統音
     func play(hot: Bool) {
         playing?.stop()
-        if let path = customSoundPath(hot: hot), let snd = NSSound(contentsOfFile: path, byReference: true) {
+        if let path = soundPath(hot: hot), let snd = NSSound(contentsOfFile: path, byReference: true) {
             playing = snd
         } else {
             playing = NSSound(named: hot ? Self.hotSound : Self.coldSound)
@@ -125,11 +131,53 @@ final class Monitor {
         lastSound = Date()
     }
 
-    func customSoundPath(hot: Bool) -> String? {
+    /// 讀每個 CPU / GPU 感測器。key 用 guard 掃好寫在快照裡的（面板平常只讀快照，不會自己掃），沒有才掃一次
+    @ObservationIgnored private var sensorKeys: [String] = []
+    @ObservationIgnored private var smcOpened = false
+    func readSensors() {
+        if !smcOpened { smcOpened = (try? SMC.open()) != nil }
+        guard smcOpened else { return }
+        if sensorKeys.isEmpty {
+            if let saved = Snapshot.load(), let ck = saved.cpuKeys, !ck.isEmpty {
+                sensorKeys = ck + (saved.gpuKeys ?? [])
+            } else {
+                let prefixes = config.cpuPrefixes + config.gpuPrefixes
+                sensorKeys = SMC.scanTemperatureKeys().map(\.0).filter { k in prefixes.contains { k.hasPrefix($0) } }
+            }
+        }
+        var out: [String: Double] = [:]
+        for k in sensorKeys { if let t = SMC.readDouble(k), SMC.plausibleTemp(t) { out[k] = t } }
+        sensorTemps = out
+    }
+
+    /// 實際會播的音檔：config 指定（存在才算）→ app bundle 內建 → nil（系統音）
+    func soundPath(hot: Bool) -> String? {
         let snd = Config.load(path: nil).sounds
-        guard let raw = hot ? snd?.critical : snd?.coolDown, !raw.isEmpty else { return nil }
-        let path = NSString(string: raw).expandingTildeInPath
-        return FileManager.default.fileExists(atPath: path) ? path : nil
+        if let raw = hot ? snd?.overheat : snd?.cooldown, !raw.isEmpty {
+            let path = NSString(string: raw).expandingTildeInPath
+            if FileManager.default.fileExists(atPath: path) { return path }
+        }
+        return Bundle.main.path(forResource: hot ? "overheat" : "cooldown", ofType: "mp3", inDirectory: "Sounds")
+    }
+
+    /// 面板上編輯提示音門檻：draft.sounds 缺席時先建一個，其他欄位保留
+    var draftOverheatAbove: Double {
+        get { draft.overheatAbove }
+        set { var x = draft.sounds ?? .init(); x.overheatAbove = newValue; draft.sounds = x }
+    }
+    var draftCooldownBelow: Double {
+        get { draft.cooldownBelow }
+        set { var x = draft.sounds ?? .init(); x.cooldownBelow = newValue; draft.sounds = x }
+    }
+
+    /// 重新啟動面板：由 LaunchAgent 管的就 kickstart，不然直接 open 自己的 bundle
+    func relaunch() {
+        let bundle = Bundle.main.bundlePath
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/bin/sh")
+        p.arguments = ["-c", "sleep 0.4; launchctl kickstart -k gui/$(id -u)/com.cool91.panel 2>/dev/null || open \"\(bundle)\""]
+        try? p.run()
+        NSApp.terminate(nil)
     }
 
     /// 外部（手動編輯、另一台面板）改了設定檔也跟上
@@ -139,10 +187,12 @@ final class Monitor {
         config = fresh
     }
 
-    var dirty: Bool {
+    var fanDirty: Bool {
         draft.mode != config.mode || draft.fixedRPM != config.fixedRPM || draft.includeGPU != config.includeGPU ||
         draft.curve.map { [$0.temp, $0.rpm] } != config.curve.map { [$0.temp, $0.rpm] }
     }
+    var soundDirty: Bool { draft.overheatAbove != config.overheatAbove || draft.cooldownBelow != config.cooldownBelow }
+    var dirty: Bool { fanDirty || soundDirty }
 
     /// 寫回設定檔，guard 會偵測 mtime 自動重載
     func apply() {
@@ -265,12 +315,14 @@ struct PanelView: View {
             if let s = monitor.snapshot {
                 header(s)
                 tempCard(s)
+                sensorGrid
                 fanCard(s)
                 if s.pcoreMHz != nil { freqCard(s) }
                 timeAxis
                 statsRow(s)
                 controls(s)
-                soundRow
+                soundCard
+                applyBar
                 footer
             } else {
                 Text("讀取 SMC 中…").padding()
@@ -401,6 +453,81 @@ struct PanelView: View {
             .neonPlot()
             .frame(height: 84)
         }
+    }
+
+    /// 各感測器熱度格：P-core / E-core / GPU 三組，一格一個感測器，顏色隨溫度；滑過看 key 與度數
+    var sensorGrid: some View {
+        DisclosureGroup(isExpanded: Binding(get: { monitor.showSensors }, set: { monitor.showSensors = $0 })) {
+            VStack(alignment: .leading, spacing: 6) {
+                sensorGroup("P-core", prefix: "Tp")
+                sensorGroup("E-core", prefix: "Te")
+                sensorGroup("GPU", prefix: "Tg")
+                HStack(spacing: 6) {
+                    ForEach([40, 60, 80, 95], id: \.self) { t in
+                        HStack(spacing: 2) {
+                            RoundedRectangle(cornerRadius: 2).fill(tempColor(Double(t))).frame(width: 8, height: 8)
+                            Text("\(t)°").font(.system(size: 8)).foregroundStyle(.tertiary)
+                        }
+                    }
+                    Spacer()
+                    Text("風扇看的是最熱那一格").font(.system(size: 8)).foregroundStyle(.tertiary)
+                }
+            }
+            .padding(.top, 6)
+        } label: {
+            HStack {
+                Text("各感測器").font(.caption2).foregroundStyle(.secondary)
+                if monitor.showSensors {
+                    Text("\(monitor.sensorTemps.count) 個").font(.caption2).foregroundStyle(.tertiary)
+                }
+            }
+        }
+        .padding(.horizontal, 8).padding(.vertical, 4)
+        .background(Neon.cardBG)
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+
+    func sensorGroup(_ name: String, prefix: String) -> some View {
+        let items = monitor.sensorTemps.filter { $0.key.hasPrefix(prefix) }.sorted { $0.key < $1.key }
+        let hi = items.map(\.value).max()
+        let avg = items.isEmpty ? nil : items.map(\.value).reduce(0, +) / Double(items.count)
+        return VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 6) {
+                Text(name).font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary).frame(width: 44, alignment: .leading)
+                if let hi, let avg {
+                    Text(String(format: "最熱 %.0f°", hi)).font(.system(size: 10, design: .monospaced)).foregroundStyle(tempColor(hi))
+                    Text(String(format: "平均 %.0f°", avg)).font(.system(size: 10, design: .monospaced)).foregroundStyle(.tertiary)
+                } else {
+                    Text("—").font(.system(size: 10)).foregroundStyle(.tertiary)
+                }
+                Spacer()
+                Text("×\(items.count)").font(.system(size: 9)).foregroundStyle(.quaternary)
+            }
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 13, maximum: 13), spacing: 3)], alignment: .leading, spacing: 3) {
+                ForEach(items, id: \.key) { k, t in
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(tempColor(t))
+                        .frame(width: 13, height: 13)
+                        .shadow(color: t >= monitor.config.hotTemp ? tempColor(t).opacity(0.7) : .clear, radius: 3)
+                        .help(String(format: "%@  %.1f°C", k, t))
+                }
+            }
+        }
+    }
+
+    /// 溫度 → 顏色：40 藍青、60 綠、80 琥珀、95+ 紅，中間線性混色
+    func tempColor(_ t: Double) -> Color {
+        let stops: [(Double, (Double, Double, Double))] = [
+            (40, (0.16, 0.55, 0.96)), (60, (0.36, 0.95, 0.55)), (80, (1.00, 0.72, 0.30)), (95, (1.00, 0.36, 0.42)),
+        ]
+        if t <= stops[0].0 { let c = stops[0].1; return Color(red: c.0, green: c.1, blue: c.2) }
+        if t >= stops.last!.0 { let c = stops.last!.1; return Color(red: c.0, green: c.1, blue: c.2) }
+        for i in 1..<stops.count where t <= stops[i].0 {
+            let (a, b) = (stops[i - 1], stops[i])
+            let f = (t - a.0) / (b.0 - a.0)
+            return Color(red: a.1.0 + (b.1.0 - a.1.0) * f, green: a.1.1 + (b.1.1 - a.1.1) * f, blue: a.1.2 + (b.1.2 - a.1.2) * f)
+        }
+        return Neon.cyan
     }
 
     func fanCard(_ s: Snapshot) -> some View {
@@ -537,7 +664,7 @@ struct PanelView: View {
                 Spacer()
                 if !s.guardRunning {
                     Label("guard 未執行", systemImage: "exclamationmark.triangle.fill").font(.caption2).foregroundStyle(.orange)
-                } else if monitor.dirty {
+                } else if monitor.fanDirty {
                     Text("未套用").font(.caption2).foregroundStyle(.orange)
                 }
             }
@@ -586,17 +713,6 @@ struct PanelView: View {
                 Text("GPU 溫度也納入").font(.caption2).foregroundStyle(.secondary)
             }
             .toggleStyle(.checkbox).controlSize(.mini)
-
-            // 套用列：有改動才出現
-            if monitor.dirty || monitor.saveMessage != nil {
-                HStack {
-                    if let m = monitor.saveMessage { Text(m).font(.caption2).foregroundStyle(m.hasPrefix("寫入失敗") ? .red : .secondary) }
-                    Spacer()
-                    Button("還原") { monitor.revert() }.disabled(!monitor.dirty)
-                    Button("套用") { monitor.apply() }.disabled(!monitor.dirty).keyboardShortcut(.defaultAction).buttonStyle(.borderedProminent)
-                }
-                .controlSize(.small)
-            }
         }
         .padding(10)
         .background(Neon.cardBG)
@@ -675,31 +791,70 @@ struct PanelView: View {
         .frame(height: 100)
     }
 
-    /// 提示音開關：熱 / 冷各自獨立，旁邊 ▶ 可試聽。即時生效，不用套用
-    var soundRow: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "speaker.wave.2.fill").font(.caption2).foregroundStyle(.secondary)
-            Text("提示音").font(.caption2).foregroundStyle(.secondary)
-            soundToggle("過熱 / 降頻", Neon.red, isOn: Binding(get: { monitor.hotSoundOn }, set: { monitor.hotSoundOn = $0 }), hot: true)
-            soundToggle("降溫回穩", Neon.green, isOn: Binding(get: { monitor.coldSoundOn }, set: { monitor.coldSoundOn = $0 }), hot: false)
-            Spacer()
+    /// 提示音卡：熱 / 冷兩列，每列 = 開關（即時生效）+ ▶ 試聽 + 觸發門檻（走「套用」寫進 config）
+    var soundCard: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Image(systemName: "speaker.wave.2.fill").font(.caption2).foregroundStyle(.secondary)
+                Text("提示音").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                Spacer()
+                if monitor.soundDirty { Text("未套用").font(.caption2).foregroundStyle(.orange) }
+            }
+            soundLine("過熱 / 降頻", Neon.red, hot: true,
+                      isOn: Binding(get: { monitor.hotSoundOn }, set: { monitor.hotSoundOn = $0 }),
+                      threshold: Binding(get: { monitor.draftOverheatAbove }, set: { monitor.draftOverheatAbove = $0 }),
+                      range: (monitor.draftCooldownBelow + 1)...105, prefix: "≥")
+            soundLine("降溫回穩", Neon.green, hot: false,
+                      isOn: Binding(get: { monitor.coldSoundOn }, set: { monitor.coldSoundOn = $0 }),
+                      threshold: Binding(get: { monitor.draftCooldownBelow }, set: { monitor.draftCooldownBelow = $0 }),
+                      range: 40...(monitor.draftOverheatAbove - 1), prefix: "<")
+            Text("CPU / GPU 一降頻就算過熱，不看溫度。門檻獨立於風扇與 hook 的 hot 線。")
+                .font(.system(size: 9)).foregroundStyle(.tertiary).fixedSize(horizontal: false, vertical: true)
         }
-        .padding(.horizontal, 10).padding(.vertical, 6)
+        .padding(10)
         .background(Neon.cardBG)
         .clipShape(RoundedRectangle(cornerRadius: 10))
     }
 
-    func soundToggle(_ title: String, _ color: Color, isOn: Binding<Bool>, hot: Bool) -> some View {
-        let custom = monitor.customSoundPath(hot: hot)
-        return HStack(spacing: 2) {
+    func soundLine(_ title: String, _ color: Color, hot: Bool, isOn: Binding<Bool>, threshold: Binding<Double>,
+                   range: ClosedRange<Double>, prefix: String) -> some View {
+        let file = monitor.soundPath(hot: hot)
+        return HStack(spacing: 4) {
             Toggle(isOn: isOn) { Text(title).font(.caption2).foregroundStyle(isOn.wrappedValue ? color : .secondary) }
                 .toggleStyle(.checkbox).controlSize(.mini)
             Button { monitor.play(hot: hot) } label: {
                 Image(systemName: "play.circle").font(.caption2).foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
-            .help("試聽：" + (custom.map { ($0 as NSString).lastPathComponent } ?? "系統音 \(hot ? Monitor.hotSound : Monitor.coldSound)")
-                  + (hot ? "" : String(format: "（降到 %.0f°C 以下才響）", monitor.config.coolDownBelow)))
+            .help("試聽：" + (file.map { ($0 as NSString).lastPathComponent } ?? "系統音 \(hot ? Monitor.hotSound : Monitor.coldSound)"))
+            Spacer()
+            Stepper(value: threshold, in: range, step: 1) {
+                Text("\(prefix) \(Int(threshold.wrappedValue))°")
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(isOn.wrappedValue ? Color.primary : Color.secondary)
+                    .frame(width: 44, alignment: .trailing)
+            }
+            .controlSize(.mini)
+            .disabled(!isOn.wrappedValue)
+        }
+    }
+
+    /// 全域套用列：風扇或提示音任一有改動才出現，一次寫回設定檔
+    @ViewBuilder
+    var applyBar: some View {
+        if monitor.dirty || monitor.saveMessage != nil {
+            HStack {
+                if let m = monitor.saveMessage {
+                    Text(m).font(.caption2).foregroundStyle(m.hasPrefix("寫入失敗") ? .red : .secondary)
+                } else if monitor.dirty {
+                    Text("有未套用的變更").font(.caption2).foregroundStyle(.orange)
+                }
+                Spacer()
+                Button("還原") { monitor.revert() }.disabled(!monitor.dirty)
+                Button("套用") { monitor.apply() }.disabled(!monitor.dirty).keyboardShortcut(.defaultAction).buttonStyle(.borderedProminent)
+            }
+            .controlSize(.small)
+            .padding(.horizontal, 4)
         }
     }
 
@@ -709,7 +864,9 @@ struct PanelView: View {
             Text("·").foregroundStyle(.quaternary)
             Button("設定檔") { NSWorkspace.shared.selectFile(monitor.config.loadedFrom ?? "/etc/cool91/config.json", inFileViewerRootedAtPath: "") }
             Spacer()
-            Text("cool91 0.2").font(.caption2).foregroundStyle(.quaternary)
+            Text("cool91 \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev")").font(.caption2).foregroundStyle(.quaternary)
+            Button("重啟") { monitor.relaunch() }.help("重新啟動面板")
+            Text("·").foregroundStyle(.quaternary)
             Button("結束") { NSApp.terminate(nil) }
         }
         .font(.caption)

@@ -125,7 +125,7 @@ sudo cool91 fan 3000     # 手動設轉速；sudo cool91 fan auto 交還
 tail -f /var/log/cool91.log
 ```
 
-**面板**：選單列右上角，漸層微光風格（深色底、霓虹發光線、線下漸層）。頂端一句結論（全速運作 / 降頻中 / 溫度危險），下面一行「現在誰在算」（前兩名 process 的命令與工作目錄），溫度 / 風扇 / P-core 頻率三張卡各帶目前值與 5 分鐘曲線，今日統計列，曲線預覽圖（標出目前溫度與風扇位置），模式「曲線 / 固定 / 自動」，內建「安靜 / 均衡 / 強力」三組曲線，也可逐點自訂，按「套用」即生效。底下有「提示音」列：過熱 / 降頻響一聲、降溫回穩響一聲，兩個開關各自獨立，▶ 可試聽；想換音效在 config 加 `"sounds": {"critical": "~/x.mp3", "coolDown": "~/y.mp3", "coolDownBelow": 85}`（`coolDownBelow` 是降溫音的獨立門檻，不設就用 hotTemp − levelHysteresis）。
+**面板**：選單列右上角，漸層微光風格（深色底、霓虹發光線、線下漸層）。頂端一句結論（全速運作 / 降頻中 / 溫度危險），下面一行「現在誰在算」（前兩名 process 的命令與工作目錄），溫度 / 風扇 / P-core 頻率三張卡各帶目前值與 5 分鐘曲線，今日統計列，曲線預覽圖（標出目前溫度與風扇位置），模式「曲線 / 固定 / 自動」，內建「安靜 / 均衡 / 強力」三組曲線，也可逐點自訂，按「套用」即生效。溫度卡下方「各感測器」展開是熱度格：P-core / E-core / GPU 三組，一格一個 SMC 感測器（M4 共 73 個），顏色隨溫度變，滑過看 key 與度數，收合就不讀。底下「提示音」卡：過熱 / 降頻響一聲、降溫回穩響一聲，兩個開關獨立、▶ 試聽，每列有觸發溫度可調（≥ 幾度算熱、< 幾度算涼），按「套用」生效；內建兩段音效，想換在 config 設 `"sounds": {"overheat": "~/x.mp3", "cooldown": "~/y.mp3"}`。風扇或提示音有改動，底部出現「還原 / 套用」；最右下「重啟」可重開面板。
 
 **設定檔** `/etc/cool91/config.json`（範例見 `config.example.json`）：曲線、門檻、平滑係數、降速斜率、GPU 是否納入、白名單、預熱關鍵字、感測器前綴都在這。改了不用重啟，解析失敗會保留上一份。
 
@@ -261,7 +261,8 @@ Tests/Cool91CoreTests/  單元測試：曲線插值、門檻、設定解析與�
 install/                LaunchDaemon plist、newsyslog 設定、Claude Code hook 片段
 scripts/                install-root.sh（root 步驟）、install-hook.py、install-mcp.sh、make-app.sh（打包面板）
 mcp/                    cool91_mcp.py：MCP server（PEP 723 單檔，uv run --script 即跑）
-extras/                 statusline 片段
+Sounds/                 內建提示音 overheat.mp3 / cooldown.mp3（打包進面板 app）
+extras/                 statusline 片段、perf_vs_temp.py（效率 vs 溫度量測）
 docs/                   A/B 實測資料
 ```
 

@@ -53,20 +53,23 @@ public struct Config: Codable {
     public var cpuPrefixes: [String] = ["Tp", "Te"]
     public var gpuPrefixes: [String] = ["Tg"]
 
-    /// 面板提示音：critical / coolDown 是音檔路徑（mp3/aiff，可用 ~，缺席用系統音）；
-    /// coolDownBelow 是「降溫回穩」的獨立門檻（控制溫度降到這以下才響），缺席用 hotTemp − levelHysteresis。
-    /// 獨立出來是因為 hook 要「工作優先」門檻拉高（hotTemp 98），但提示音想等真的涼了（85）再響，兩者不該綁在一起
+    /// 面板提示音。音檔缺席用面板內建的 Sounds/overheat.mp3、cooldown.mp3，再沒有才退回系統音。
+    /// 門檻獨立於 hotTemp / levelHysteresis：hook 要「工作優先」可以把 hotTemp 拉到 98，
+    /// 提示音仍可在 95 就先叫、等真的涼到 85 再報回穩，兩者不該綁在一起
     public struct Sounds: Codable {
-        public var critical: String? = nil
-        public var coolDown: String? = nil
-        public var coolDownBelow: Double? = nil
-        public init(critical: String? = nil, coolDown: String? = nil, coolDownBelow: Double? = nil) {
-            self.critical = critical; self.coolDown = coolDown; self.coolDownBelow = coolDownBelow
+        public var overheat: String? = nil        // 過熱 / 降頻音檔路徑（可用 ~）
+        public var overheatAbove: Double? = nil   // 控制溫度 ≥ 此值響「過熱」；缺席用 hotTemp
+        public var cooldown: String? = nil        // 降溫回穩音檔路徑
+        public var cooldownBelow: Double? = nil   // 控制溫度 < 此值才響「回穩」；缺席用 hotTemp − levelHysteresis
+        public init(overheat: String? = nil, overheatAbove: Double? = nil, cooldown: String? = nil, cooldownBelow: Double? = nil) {
+            self.overheat = overheat; self.overheatAbove = overheatAbove; self.cooldown = cooldown; self.cooldownBelow = cooldownBelow
         }
     }
     public var sounds: Sounds? = nil
+    /// 提示音「過熱」門檻（另外 CPU / GPU 一降頻也算過熱，不看溫度）
+    public var overheatAbove: Double { sounds?.overheatAbove ?? hotTemp }
     /// 提示音「降溫回穩」門檻
-    public var coolDownBelow: Double { sounds?.coolDownBelow ?? (hotTemp - levelHysteresis) }
+    public var cooldownBelow: Double { sounds?.cooldownBelow ?? (hotTemp - levelHysteresis) }
 
     public static let defaultPaths = [
         "/etc/cool91/config.json",
@@ -118,6 +121,7 @@ public struct Config: Codable {
         guard interval >= 1 else { throw Cool91Error.usage("interval 至少 1 秒") }
         guard (0...1).contains(smoothingUp), (0...1).contains(smoothingDown) else { throw Cool91Error.usage("smoothingUp/Down 必須在 0–1") }
         guard warmTemp < hotTemp, hotTemp < criticalTemp else { throw Cool91Error.usage("門檻必須 warm < hot < critical") }
+        guard cooldownBelow < overheatAbove else { throw Cool91Error.usage("提示音門檻必須 cooldownBelow < overheatAbove") }
     }
 
     /// 讀取指定/預設路徑；全部失敗回預設值。要區分「檔案壞了」和「沒有檔案」請用 loadOrError
