@@ -2,27 +2,111 @@ import SwiftUI
 import Charts
 import Cool91Core
 
-// cool91 面板：選單列常駐，只讀資料（不需 root），每 3 秒更新一次
+// cool91 面板：選單列常駐，只讀資料（不需 root），每 3 秒更新一次。
+// 視窗是一個浮動 NSPanel（不是 MenuBarExtra 的 popover）：點選單列圖示開 / 關、可拖到任何地方、
+// 點到別的視窗不會消失、跨 Space、位置與高度記住。這套和 ghosts 的控制條同一種做法。
 
 @main
-struct PanelApp: App {
-    @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
-    @State private var monitor = Monitor()
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+    static let panelWidth: CGFloat = 348      // PanelView 320 + 兩側 14 padding
+    let monitor = Monitor()
+    private var statusItem: NSStatusItem!
+    private var panel: NSPanel!
 
-    var body: some Scene {
-        MenuBarExtra {
-            PanelView(monitor: monitor)
-        } label: {
-            Text(monitor.menuTitle)
-        }
-        .menuBarExtraStyle(.window)
+    static func main() {
+        let app = NSApplication.shared
+        let delegate = AppDelegate()
+        app.delegate = delegate
+        app.run()
     }
-}
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory) // 不顯示 Dock 圖示
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        if let b = statusItem.button {
+            b.title = monitor.menuTitle
+            b.target = self
+            b.action = #selector(statusClicked)
+            b.sendAction(on: [.leftMouseUp, .rightMouseUp])
+            b.toolTip = "cool91：左鍵開 / 關面板，右鍵選單"
+        }
+        monitor.onTick = { [weak self] in self?.statusItem.button?.title = self?.monitor.menuTitle ?? "cool91" }
+        monitor.onHide = { [weak self] in self?.hidePanel() }
+        buildPanel()
+        if UserDefaults.standard.object(forKey: "panel.open") as? Bool ?? true { showPanel() }
     }
+
+    private func buildPanel() {
+        let host = NSHostingView(rootView: PanelView(monitor: monitor))
+        host.appearance = NSAppearance(named: .darkAqua)
+        let p = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: Self.panelWidth, height: 760),
+            styleMask: [.titled, .fullSizeContentView, .resizable, .utilityWindow, .nonactivatingPanel],
+            backing: .buffered, defer: false)
+        p.title = "cool91"
+        p.titlebarAppearsTransparent = true
+        p.titleVisibility = .hidden
+        p.standardWindowButton(.closeButton)?.isHidden = true
+        p.standardWindowButton(.miniaturizeButton)?.isHidden = true
+        p.standardWindowButton(.zoomButton)?.isHidden = true
+        p.isMovableByWindowBackground = true      // 抓卡片任何空白處都能拖
+        p.backgroundColor = NSColor(Neon.panelBG) // 讓視窗自己畫圓角與陰影，SwiftUI 內容背景透明
+        p.isOpaque = false
+        p.hasShadow = true
+        p.isFloatingPanel = true
+        p.becomesKeyOnlyIfNeeded = true           // Stepper / Slider 點了才拿 key，平常不搶焦點
+        p.hidesOnDeactivate = false               // 切到別的 app 也留著
+        p.level = .floating
+        p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        p.isReleasedWhenClosed = false
+        p.delegate = self
+        // 寬鎖死，高度可拖（內容超過就捲）
+        let maxH = (NSScreen.main?.visibleFrame.height ?? 900) - 20
+        p.contentMinSize = NSSize(width: Self.panelWidth, height: 360)
+        p.contentMaxSize = NSSize(width: Self.panelWidth, height: maxH)
+        p.contentView = host
+        p.setFrameAutosaveName("cool91.panel")
+        if !p.setFrameUsingName("cool91.panel") {
+            // 第一次：貼螢幕右上角（選單列圖示這時還沒定位，不能拿它的座標）
+            let h = min(760, maxH)
+            let vf = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+            let x = vf.maxX - Self.panelWidth - 12
+            let y = vf.maxY - h - 8
+            p.setFrame(NSRect(x: x, y: y, width: Self.panelWidth, height: h), display: false)
+        }
+        panel = p
+        monitor.panelWindow = p
+    }
+
+    @objc private func statusClicked() {
+        if NSApp.currentEvent?.type == .rightMouseUp {
+            let menu = NSMenu()
+            menu.addItem(withTitle: panel.isVisible ? "隱藏面板" : "顯示面板", action: #selector(togglePanel), keyEquivalent: "")
+            menu.addItem(.separator())
+            menu.addItem(withTitle: "重啟面板", action: #selector(relaunch), keyEquivalent: "")
+            menu.addItem(withTitle: "結束 cool91 面板", action: #selector(quit), keyEquivalent: "")
+            for i in menu.items { i.target = self }
+            statusItem.menu = menu
+            statusItem.button?.performClick(nil)
+            statusItem.menu = nil   // 用完拿掉，左鍵才會回到 action
+        } else {
+            togglePanel()
+        }
+    }
+
+    @objc func togglePanel() { panel.isVisible ? hidePanel() : showPanel() }
+    func showPanel() {
+        panel.orderFront(nil)
+        UserDefaults.standard.set(true, forKey: "panel.open")
+        monitor.tick()
+    }
+    func hidePanel() {
+        panel.orderOut(nil)
+        UserDefaults.standard.set(false, forKey: "panel.open")
+        monitor.tick()
+    }
+    @objc func relaunch() { monitor.relaunch() }
+    @objc func quit() { NSApp.terminate(nil) }
 }
 
 // MARK: - 資料
@@ -36,6 +120,9 @@ final class Monitor {
     var saveMessage: String? = nil
     /// 選單有沒有打開。關著的時候只更新標題（讀一個 JSON，不開 SMC、不畫圖）
     var panelOpen = false { didSet { if panelOpen { reloadConfig(); tick() } } }
+    @ObservationIgnored weak var panelWindow: NSWindow? = nil
+    @ObservationIgnored var onTick: (() -> Void)? = nil   // 每輪取樣後更新選單列標題
+    @ObservationIgnored var onHide: (() -> Void)? = nil   // 面板右上角 ✕
     let intervalOpen: TimeInterval = 3
     let intervalIdle: TimeInterval = 5
     private var timer: Timer?
@@ -74,13 +161,7 @@ final class Monitor {
         }
     }
 
-    /// MenuBarExtra(.window) 的內容 view 不一定會 disappear，onAppear 不可靠；直接看有沒有可見視窗
-    var windowVisible: Bool {
-        let ws = (NSApplication.shared as NSApplication?)?.windows ?? []
-        let dbg = ws.map { "\(type(of: $0)) vis=\($0.isVisible) key=\($0.isKeyWindow) occl=\($0.occlusionState.contains(.visible)) alpha=\($0.alphaValue) onscreen=\($0.isOnActiveSpace) frame=\($0.frame) level=\($0.level.rawValue) appActive=\(NSApplication.shared.isActive)" }.joined(separator: "\n")
-        try? (dbg + "\n").write(toFile: "/tmp/cool91.panel.debug", atomically: true, encoding: .utf8)
-        return ws.contains { String(describing: type(of: $0)).hasPrefix("MenuBarExtraWindow") && $0.isVisible }
-    }
+    var windowVisible: Bool { panelWindow?.isVisible ?? false }
 
     func tick() {
         // 設定檔被改了（另一個 session、手動編輯）就跟上，門檻和音檔才會即時生效；只 stat 一次，閒置也做
@@ -90,6 +171,7 @@ final class Monitor {
         let s = Snapshot.takeFast(config: config)
         snapshot = s
         checkSound(s)
+        onTick?()
         let open = windowVisible
         if open != panelOpen { panelOpen = open; return }   // didSet 會再叫一次 tick
         guard panelOpen else { return }
@@ -314,6 +396,15 @@ struct PanelView: View {
     var monitor: Monitor
 
     var body: some View {
+        ScrollView(.vertical, showsIndicators: true) {
+            content
+        }
+        .frame(width: AppDelegate.panelWidth)
+        .preferredColorScheme(.dark)
+        .onAppear { monitor.tick() }
+    }
+
+    var content: some View {
         VStack(alignment: .leading, spacing: 10) {
             if let s = monitor.snapshot {
                 header(s)
@@ -333,9 +424,6 @@ struct PanelView: View {
         }
         .padding(14)
         .frame(width: 320)
-        .background(Neon.panelBG)
-        .preferredColorScheme(.dark)
-        .onAppear { monitor.tick() }
     }
 
     /// 標題列：名稱 + 狀態 chip，下面一行「結論」——現在能不能全力開工
@@ -348,6 +436,11 @@ struct PanelView: View {
                     chipLabel("預熱 \(Int(b.timeIntervalSinceNow))s", Neon.cyan)
                 }
                 chipLabel(s.guardRunning ? "guard 執行中" : "guard 未執行", s.guardRunning ? Color.white.opacity(0.6) : Neon.amber)
+                Button { monitor.onHide?() } label: {
+                    Image(systemName: "xmark.circle.fill").font(.body).foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.plain)
+                .help("收起面板（點選單列圖示再打開）")
             }
             statusLine(s)
             if let top = s.topProcesses, !top.isEmpty { busyLine(top) }
@@ -870,7 +963,7 @@ struct PanelView: View {
             Text("cool91 \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev")").font(.caption2).foregroundStyle(.quaternary)
             Button("重啟") { monitor.relaunch() }.help("重新啟動面板")
             Text("·").foregroundStyle(.quaternary)
-            Button("結束") { NSApp.terminate(nil) }
+            Button("結束") { NSApp.terminate(nil) }.help("結束面板程式（guard 不受影響）")
         }
         .font(.caption)
         .buttonStyle(.plain)

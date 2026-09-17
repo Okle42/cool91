@@ -2,8 +2,9 @@
 
 ## 0.3.0 — 2026-09-18
 
-重整版：提示音進專案、門檻可在面板調、各感測器看得到。
+重整版：面板改成浮動視窗、提示音進專案、門檻可在面板調、各感測器看得到。
 
+- **面板改成可拖的浮動視窗**（和 ghosts 的控制條同一種做法）：點選單列圖示開 / 關，右上角 ✕ 收起，右鍵圖示有選單（顯示 / 隱藏 / 重啟 / 結束）。不再是點外面就消失的 popover：拖到哪都行、切 app 不會不見、跨 Space、位置與高度記住、重開時記得上次開著還是收著。寬固定、高度可拖，內容超過就捲。`NSPanel` + `.nonactivatingPanel`，平常不搶鍵盤焦點
 - **內建提示音**：`Sounds/overheat.m4a`（過熱 / 降頻：下行兩音）、`Sounds/cooldown.m4a`（降溫回穩：上行琶音）隨面板打包進 app bundle，裝好就有聲音。兩段是純正弦波合成的（`extras/make_sounds.py`），無版權問題。config 的 `sounds.overheat` / `sounds.cooldown` 可覆蓋成自己的音檔，缺席用內建，內建也不在才退回系統音
 - **提示音門檻面板可調**：提示音卡每列多一個 Stepper，`sounds.overheatAbove`（≥ 此溫度響「熱」，缺席 = hotTemp）/ `sounds.cooldownBelow`（< 此溫度響「冷」，缺席 = hotTemp − levelHysteresis），按「套用」寫進 config。兩個門檻互相夾住，回穩不會高於過熱（validate 也擋）。CPU / GPU 降頻不看溫度一律算過熱
 - **各感測器熱度格**：溫度卡下方「各感測器」展開，P-core / E-core / GPU 三組，一格一個 SMC 感測器（M4 共 73 個），顏色隨溫度 40 藍 → 60 綠 → 80 琥珀 → 95 紅，滑過看 key 與度數，每組附最熱 / 平均。只有展開時才讀，收合零成本；展開狀態實測面板 CPU 0.0%
