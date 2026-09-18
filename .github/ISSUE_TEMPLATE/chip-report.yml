@@ -1,0 +1,43 @@
+name: 其他晶片回報 / Chip report
+description: 在 Mac mini M4 以外的機器上裝了 cool91，回報能不能用 / Ran cool91 on something other than a Mac mini M4
+title: "[chip] "
+labels: [chip-report]
+body:
+  - type: input
+    id: machine
+    attributes:
+      label: 機型與晶片 / Machine & chip
+      placeholder: MacBook Pro 14" M3 Pro, macOS 15.1
+    validations: { required: true }
+  - type: dropdown
+    id: result
+    attributes:
+      label: 結果 / Result
+      options:
+        - 正常，溫度風扇頻率都對 / Works, readings and fan look right
+        - 部分正常 / Partly works (say what below)
+        - 不能用 / Doesn't work
+    validations: { required: true }
+  - type: textarea
+    id: chip
+    attributes:
+      label: cool91 chip
+      render: text
+    validations: { required: true }
+  - type: textarea
+    id: sensors
+    attributes:
+      label: cool91 sensors
+      description: 全部貼上，長沒關係 / paste everything, long is fine
+      render: text
+    validations: { required: true }
+  - type: textarea
+    id: status
+    attributes:
+      label: cool91 status 與 cool91 doctor
+      render: text
+  - type: textarea
+    id: notes
+    attributes:
+      label: 補充 / Notes
+      description: 哪個數字看起來不對、風扇有沒有反應、對照別的工具的值 / what looks wrong, did the fan respond, what other tools show

@@ -228,6 +228,19 @@ The Chinese README has the full list of 18; the ones that matter most if you bui
 4. If the fan keys are no longer `F0Ac/F0Tg/F0Md`, edit `fan(_:)` / `setFan` in `Sources/Cool91Core/SMC.swift`
 5. If `powermetrics` output changes, edit the parser in `Sources/Cool91Core/FreqReader.swift`
 
+## Reports from other chips
+
+Only tested on a **Mac mini M4**. M1 / M2 / M3, Pro / Max / Ultra and MacBooks (battery sensors, possibly different fan keys, no fan on the Air) are untested. Whether it works or not, please open an [issue](https://github.com/Okle42/cool91/issues/new?template=chip-report.yml) with:
+
+```bash
+cool91 chip        # chip model, sensor grouping, fan count
+cool91 sensors     # every temperature key and its value
+cool91 status      # do the readings make sense
+cool91 doctor      # which check is not green
+```
+
+That's enough to add your chip's prefixes and fan keys to the defaults so the next release works without a config change.
+
 ## Layout
 
 ```

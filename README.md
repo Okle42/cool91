@@ -270,6 +270,19 @@ Claude Code hook 預設 60 秒逾時，而等待上限是 90 秒 —— hook 設
 4. 若風扇 key 不再是 `F0Ac/F0Tg/F0Md`，改 `Sources/Cool91Core/SMC.swift` 的 `fan(_:)` / `setFan`
 5. `powermetrics` 輸出格式若變，改 `Sources/Cool91Core/FreqReader.swift` 的解析
 
+## 其他晶片回報
+
+只在 **Mac mini M4** 上實測過。M1 / M2 / M3、Pro / Max / Ultra、MacBook（有電池感測器、風扇 key 可能不同、Air 沒風扇）都還沒人試。裝了以後不管正不正常，開一個 [issue](https://github.com/Okle42/cool91/issues/new?template=chip-report.yml) 貼上：
+
+```bash
+cool91 chip        # 晶片型號、感測器分組、風扇數
+cool91 sensors     # 所有溫度 key 與目前值
+cool91 status      # 讀值是否合理
+cool91 doctor      # 哪一項不綠
+```
+
+有這些就能把新晶片的前綴與風扇 key 加進預設，下一版你就不用改 config。
+
 ## 專案結構
 
 ```

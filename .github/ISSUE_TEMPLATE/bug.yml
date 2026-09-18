@@ -1,0 +1,24 @@
+name: Bug
+description: 在 Mac mini M4 上就有的問題 / Something broken on a supported machine
+labels: [bug]
+body:
+  - type: input
+    id: machine
+    attributes:
+      label: 機型、晶片、macOS 版本 / Machine, chip, macOS
+    validations: { required: true }
+  - type: textarea
+    id: what
+    attributes:
+      label: 發生什麼、預期什麼 / What happened, what you expected
+    validations: { required: true }
+  - type: textarea
+    id: doctor
+    attributes:
+      label: cool91 doctor
+      render: text
+  - type: textarea
+    id: log
+    attributes:
+      label: /var/log/cool91.log 最後 50 行 / last 50 lines
+      render: text
