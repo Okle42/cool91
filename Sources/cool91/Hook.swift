@@ -18,7 +18,9 @@ func runHook(config: Config) {
     }
     let allowed = !command.isEmpty && Policy.commandIsAllowed(command, allow: config.hookAllowCommands)
     if !command.isEmpty, Policy.commandNeedsBoost(command, keywords: config.boostCommands) {
-        Event(kind: .boost, rpm: config.boostRPM, seconds: config.boostSeconds, note: String(command.prefix(60))).post()
+        // 備註只留一行：換行換成 ⏎，不然 heredoc 指令會把 log 撐成多行、失去時間戳
+        let oneLine = command.replacingOccurrences(of: "\n", with: " ⏎ ")
+        Event(kind: .boost, rpm: config.boostRPM, seconds: config.boostSeconds, note: String(oneLine.prefix(60))).post()
     }
 
     var s = Snapshot.takeFast(config: config)

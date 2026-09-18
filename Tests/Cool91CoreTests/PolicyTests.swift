@@ -38,6 +38,25 @@ final class PolicyTests: XCTestCase {
         XCTAssertFalse(Policy.commandNeedsBoost("echo 'make '", keywords: boost))
     }
 
+    /// 2026-09-18 log 裡 343 次預熱有一大半是這幾種誤判：heredoc 內容每行被當指令、引號裡的 | 被當管線
+    func testBoostIgnoresHeredocBodyAndQuotedPipes() {
+        XCTAssertFalse(Policy.commandNeedsBoost("python3 - <<'PY'\nimport pytest\npytest.main(['-q'])\nPY", keywords: boost))
+        XCTAssertFalse(Policy.commandNeedsBoost("cat > x.py <<EOF\nmake all\nclang -O2\nEOF", keywords: boost))
+        XCTAssertFalse(Policy.commandNeedsBoost("sed -i '' 's|foo|swift build|' Makefile", keywords: boost))
+        XCTAssertFalse(Policy.commandNeedsBoost("grep -vE \"pytest|swift build|make \" /var/log/cool91.log", keywords: boost))
+        XCTAssertFalse(Policy.commandNeedsBoost("python3 - <<<'make '", keywords: boost))
+        // heredoc 結束之後的指令還是要看得到
+        XCTAssertTrue(Policy.commandNeedsBoost("cat > x <<EOF\nhello\nEOF\nmake -j8", keywords: boost))
+        XCTAssertTrue(Policy.commandNeedsBoost("cd /x && ~/.venvs/d/bin/python -m pytest tests/", keywords: boost))
+        XCTAssertTrue(Policy.commandNeedsBoost("echo 'x' | ffmpeg -i - out.mp4", keywords: boost))
+    }
+
+    func testSegmentsRespectQuotes() {
+        XCTAssertEqual(Policy.segments("echo 'a;b' && ls").map { $0[0] }, ["echo", "ls"])
+        XCTAssertEqual(Policy.segments("echo \"a|b\\\"c\" | grep x").map { $0[0] }, ["echo", "grep"])
+        XCTAssertTrue(Policy.commandIsAllowed("grep -E 'a|b' f; echo \"x;y\"", allow: allow))
+    }
+
     // MARK: 把關判斷
 
     func snap(level: Level, pressure: String?) -> Snapshot {

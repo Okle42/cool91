@@ -61,6 +61,7 @@ func runGuard(config initial: Config, dryRun: Bool, interval: Double) throws {
         _ = Unmanaged.passRetained(src as AnyObject)
     }
 
+    let boostGraceSeconds = 30.0 // 預熱至少撐這麼久才判斷要不要提早收
     var lastTarget: Double = -1
     var forceWrite = false       // 設定重載後這輪不管 deadband 一定寫
     var auto = true              // 目前是否交還 SMC 自動
@@ -72,8 +73,12 @@ func runGuard(config initial: Config, dryRun: Bool, interval: Double) throws {
     var faultStreak = 0          // 連續感測器故障輪數
     var boostUntil: Date? = nil
     var boostRPM: Double = 0
-    // 今日統計：guard 重啟時從舊快照接續（同一天才算）
-    var stats = Snapshot.load()?.stats.flatMap { $0.date == Snapshot.Stats.today() ? $0 : nil } ?? Snapshot.Stats(date: Snapshot.Stats.today())
+    var boostStart: Date? = nil  // 這一波預熱從何時開始（判斷「預熱了 30 秒溫度還沒起來」用）
+    var levelCoolRounds = 0      // 等級連續幾輪該降（降級前的等待計數，和風扇降速同一個 rampDownHoldRounds）
+    // 今日統計：guard 重啟時從舊快照接續，快照不在（/tmp 重開機被清）就從 /var/db 的落地檔接（都要同一天才算）
+    var stats = [Snapshot.load()?.stats, Snapshot.Stats.loadPersisted()].compactMap { $0 }.first { $0.date == Snapshot.Stats.today() }
+        ?? Snapshot.Stats(date: Snapshot.Stats.today())
+    var statsPersistRound = 0
     var history = History.load().filter { Date().timeIntervalSince($0.time) < History.keep }
 
     // Watchdog：主迴圈卡在 kernel 呼叫（SMC mach_msg 不回、被餓死…）連 SIGTERM 都收不到；
@@ -113,6 +118,7 @@ func runGuard(config initial: Config, dryRun: Bool, interval: Double) throws {
             switch e.kind {
             case .boost:
                 let until = e.time.addingTimeInterval(e.seconds ?? config.boostSeconds)
+                if boostUntil == nil { boostStart = Date() }
                 if boostUntil == nil || until > boostUntil! { boostUntil = until }
                 boostRPM = max(boostRPM, e.rpm ?? config.boostRPM)
                 stats.boosts += 1
@@ -121,7 +127,7 @@ func runGuard(config initial: Config, dryRun: Bool, interval: Double) throws {
             case .hookDeny: stats.hookDenies += 1
             }
         }
-        if let b = boostUntil, b <= Date() { boostUntil = nil; boostRPM = 0 }
+        if let b = boostUntil, b <= Date() { boostUntil = nil; boostRPM = 0; boostStart = nil }
 
         var s = Snapshot.take(config: config)
         if let g = gpuStats.sample() { s.gpuActive = g.active; s.gpuMHz = g.mhz; s.gpuThrottlePercent = gpuStats.cltmPercent }
@@ -159,14 +165,21 @@ func runGuard(config initial: Config, dryRun: Bool, interval: Double) throws {
             default: // curve；低於曲線最低點 5°C 以上就交還自動讓 SMC 省電
                 desired = smoothed! < curveMin - 5 ? nil : config.rpm(for: smoothed!)
             }
+            // 預熱了 30 秒控制溫度還在曲線起點以下，表示這條指令根本不重（幾秒就跑完的 pytest、被關鍵字撞到的 sed…），
+            // 不必再轟滿 120 秒；真的重的指令 30 秒內早就過 60°C，曲線會接手
+            if let b = boostUntil, b > Date(), let st = boostStart, Date().timeIntervalSince(st) >= boostGraceSeconds, smoothed! < curveMin {
+                log("預熱提早結束：\(Int(Date().timeIntervalSince(st))) 秒後仍只有 \(Int(s.controlTemp))°C，不像重工作")
+                boostUntil = nil; boostRPM = 0; boostStart = nil
+            }
             // 預熱：重指令剛開始、溫度還沒上來時先把風扇拉起來；auto 模式尊重使用者，不預熱
             if let b = boostUntil, b > Date(), config.mode != "auto" {
                 desired = max(desired ?? 0, boostRPM)
             }
             // 任何來源的目標都夾在韌體回報的 F0Mn–F0Mx 之間，永遠不會超轉
             var target = desired.map { min(max($0, fmin), fmax) }
-            // 降速要「連續 N 輪都偏冷」才開始，短暫鬆一下不理；一旦要升速就立刻歸零
-            if let t = target, lastTarget >= 0, t < lastTarget - config.deadband {
+            // 降速（含交還自動）要「連續 N 輪都偏冷」才開始，短暫鬆一下不理；一旦要升速就立刻歸零
+            // （面板剛切到 auto 模式那輪 forceWrite 為 true：使用者要的是立刻交還，不等）
+            if lastTarget >= 0, !forceWrite, target == nil || target! < lastTarget - config.deadband {
                 coolRounds += 1
                 if coolRounds <= config.rampDownHoldRounds { target = lastTarget }
             } else {
@@ -187,13 +200,21 @@ func runGuard(config initial: Config, dryRun: Bool, interval: Double) throws {
                     log("\(s.short) → 目標 \(Int(target)) rpm")
                 }
             } else if !auto {
-                restore(); auto = true; lastTarget = -1
+                restore(); auto = true; lastTarget = -1; forceWrite = false
                 log("\(s.short) → 交還自動")
             }
         }
 
-        // 等級加遲滯（升級立即、降級要低於門檻 3°C），快照、統計、log 都用這個
-        s.level = config.level(for: s.controlTemp, previous: lastLevel)
+        // 等級加遲滯（升級立即、降級要低於門檻 3°C 且連續 rampDownHoldRounds 輪都如此），快照、統計、log 都用這個。
+        // 單核尖峰 5 秒內 50↔80°C 來回，只靠 3°C 遲滯一天會寫幾百條 ok↔warm；升級仍是立即，安全不打折
+        let rawLevel = config.level(for: s.controlTemp, previous: lastLevel)
+        if let last = lastLevel, rawLevel < last {
+            levelCoolRounds += 1
+            s.level = levelCoolRounds > config.rampDownHoldRounds ? rawLevel : last
+        } else {
+            levelCoolRounds = 0
+            s.level = rawLevel
+        }
         // 統計
         switch s.level {
         case .warm: stats.warmSeconds += interval
@@ -226,6 +247,8 @@ func runGuard(config initial: Config, dryRun: Bool, interval: Double) throws {
         s.boostUntil = boostUntil
         s.stats = stats
         s.save()
+        statsPersistRound += 1
+        if isRoot && !dryRun && statsPersistRound % 12 == 0 { stats.persist() }
 
         history.append(HistoryPoint(time: s.time, cpu: s.cpuMax, gpu: s.gpuMax, rpm: s.fans.first?.rpm ?? 0, target: auto ? nil : lastTarget, pMHz: s.pcoreMHz, gpuActive: s.gpuActive))
         history.removeAll { Date().timeIntervalSince($0.time) > History.keep }
@@ -241,4 +264,5 @@ func runGuard(config initial: Config, dryRun: Bool, interval: Double) throws {
         log("cool91 guard 結束，風扇已交還自動")
     }
     var s = Snapshot.take(config: config); s.guardRunning = false; s.stats = stats; s.save()
+    if isRoot && !dryRun { stats.persist() }
 }

@@ -20,22 +20,63 @@ public enum Policy {
         return (s.level >= .hot, false)
     }
 
-    /// 把 shell 指令依 ; && || | 換行 切段，每段去掉 sudo/env/exec/time/nice/VAR=x 前綴後回傳 token 陣列（第一個 token 已取檔名）
+    /// 把 shell 指令切段：先剝掉 heredoc 主體（`<<TAG` 到 `TAG` 行之間是資料不是指令），再在引號外的 ; | & 換行 處切，
+    /// 每段去掉 sudo/env/exec/time/nice/VAR=x 前綴後回傳 token 陣列（第一個 token 已取檔名）。
+    /// 引號內的 | ; 不切 —— 否則 `sed 's|x|swift build|'`、`grep -E "pytest|make "` 會被當成真的要跑 swift build
     static func segments(_ command: String) -> [[String]] {
-        command
-            .replacingOccurrences(of: "&&", with: "\n")
-            .replacingOccurrences(of: "||", with: "\n")
-            .components(separatedBy: CharacterSet(charactersIn: ";|\n"))
-            .compactMap { seg in
-                var tokens = seg.trimmingCharacters(in: .whitespaces).split(separator: " ", omittingEmptySubsequences: true).map(String.init)
-                while let t = tokens.first,
-                      ["sudo", "env", "exec", "time", "nice"].contains(t) || t.hasPrefix("-") || (t.contains("=") && !t.hasPrefix("-")) {
-                    tokens.removeFirst()
-                }
-                guard !tokens.isEmpty else { return nil }
-                tokens[0] = (tokens[0] as NSString).lastPathComponent
-                return tokens
+        stripHeredocs(command).flatMap(splitOutsideQuotes).compactMap { seg in
+            var tokens = seg.split(whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init)
+            while let t = tokens.first,
+                  ["sudo", "env", "exec", "time", "nice"].contains(t) || t.hasPrefix("-") || (t.contains("=") && !t.hasPrefix("-")) {
+                tokens.removeFirst()
             }
+            guard !tokens.isEmpty else { return nil }
+            tokens[0] = (tokens[0] as NSString).lastPathComponent
+            return tokens
+        }
+    }
+
+    private static let heredocTag = try! NSRegularExpression(pattern: "(?<!<)<<(?!<)-?\\s*['\"]?([A-Za-z_][A-Za-z0-9_]*)['\"]?")   // <<< 是 here-string 不是 heredoc
+
+    /// 逐行掃：遇到 `<<TAG` 就把接下來到 `TAG` 那行為止全部丟掉（那是餵給指令的資料）；回傳剩下的指令行
+    static func stripHeredocs(_ command: String) -> [String] {
+        var out: [String] = []
+        var endTag: String? = nil
+        for line in command.components(separatedBy: "\n") {
+            if let tag = endTag {
+                if line.trimmingCharacters(in: .whitespaces) == tag { endTag = nil }
+                continue
+            }
+            out.append(line)
+            let ns = line as NSString
+            if let m = heredocTag.firstMatch(in: line, range: NSRange(location: 0, length: ns.length)) {
+                endTag = ns.substring(with: m.range(at: 1))
+            }
+        }
+        return out
+    }
+
+    /// 在單引號 / 雙引號外面的 ; | & 處切段（&& || 也落在這裡；反斜線跳脫的下一個字元照抄）
+    static func splitOutsideQuotes(_ line: String) -> [String] {
+        var segs: [String] = []
+        var cur = ""
+        var quote: Character? = nil
+        var escaped = false
+        for ch in line {
+            if escaped { cur.append(ch); escaped = false; continue }
+            if let q = quote {
+                if ch == q { quote = nil } else if ch == "\\" && q == "\"" { escaped = true }
+                cur.append(ch); continue
+            }
+            switch ch {
+            case "'", "\"": quote = ch; cur.append(ch)
+            case "\\": escaped = true
+            case ";", "|", "&": segs.append(cur); cur = ""
+            default: cur.append(ch)
+            }
+        }
+        segs.append(cur)
+        return segs.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
     }
 
     /// 指令是否全部落在白名單（降溫、查狀態用的指令在 critical 也要能跑）
@@ -45,7 +86,7 @@ public enum Policy {
         return segs.allSatisfy { allow.contains($0[0]) }
     }
 
-    /// 指令是否看起來是重工作（要預熱）。只看每段指令的開頭，不掃整段文字 —— 否則 heredoc 或字串裡提到 "swift build" 也會觸發
+    /// 指令是否看起來是重工作（要預熱）。只看每段指令的開頭三個 token，不掃整段文字、不看 heredoc 內容與引號裡的字
     public static func commandNeedsBoost(_ command: String, keywords: [String]) -> Bool {
         segments(command).contains { tokens in
             let head = tokens.prefix(3).joined(separator: " ").lowercased() + " "

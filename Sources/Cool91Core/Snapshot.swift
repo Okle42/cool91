@@ -66,6 +66,20 @@ public struct Snapshot: Codable {
             let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; f.locale = Locale(identifier: "en_US_POSIX")
             return f.string(from: Date())
         }
+
+        /// 快照在 /tmp，重開機就沒了 —— 今日統計另外落在這裡，guard 重啟／關機重開都接得上（只有 root 的 guard 會寫）
+        public static let persistPath = "/var/db/cool91/stats.json"
+
+        public static func loadPersisted() -> Stats? {
+            guard let d = FileManager.default.contents(atPath: persistPath) else { return nil }
+            return try? JSONDecoder().decode(Stats.self, from: d)
+        }
+
+        public func persist() {
+            try? FileManager.default.createDirectory(atPath: (Stats.persistPath as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+            guard let d = try? JSONEncoder().encode(self) else { return }
+            Snapshot.atomicWrite(d, to: Stats.persistPath)
+        }
     }
 
     /// 手動解碼：新加的欄位缺席時用預設值，舊版 guard 寫的快照也讀得懂
