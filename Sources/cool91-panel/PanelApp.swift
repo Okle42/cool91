@@ -12,6 +12,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let monitor = Monitor()
     private var statusItem: NSStatusItem!
     private var panel: NSPanel!
+    /// 視窗高度跟著內容走（展開感測器就長高、收起就縮回），直到使用者自己拖過高度為止
+    private var autoHeight = UserDefaults.standard.object(forKey: "panel.autoHeight") as? Bool ?? true
+    private var programmaticResize = false
 
     static func main() {
         let app = NSApplication.shared
@@ -32,6 +35,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         monitor.onTick = { [weak self] in self?.statusItem.button?.title = self?.monitor.menuTitle ?? "cool91" }
         monitor.onHide = { [weak self] in self?.hidePanel() }
+        monitor.onContentHeight = { [weak self] h in self?.fitHeight(to: h) }
         buildPanel()
         if UserDefaults.standard.object(forKey: "panel.open") as? Bool ?? true { showPanel() }
     }
@@ -76,12 +80,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         panel = p
         monitor.panelWindow = p
+        fitHeight(to: monitor.contentHeight)   // 內容高度可能在 panel 指派前就量好了
+    }
+
+    /// 內容高度變了：autoHeight 時把視窗調成剛好（上緣不動、不超過螢幕）
+    private func fitHeight(to contentH: CGFloat) {
+        guard autoHeight, let p = panel, contentH > 0 else { return }
+        let maxH = ((p.screen ?? NSScreen.main)?.visibleFrame.height ?? 900) - 20
+        let h = min(max(contentH, 360), maxH)
+        guard abs(p.frame.height - h) > 1 else { return }
+        var f = p.frame
+        f.origin.y += f.height - h   // 保持頂邊
+        f.size.height = h
+        programmaticResize = true
+        p.setFrame(f, display: true, animate: p.isVisible)
+        programmaticResize = false
+    }
+
+    /// 使用者自己拖了高度 → 之後不再自動跟內容；右鍵選單可以恢復
+    func windowDidResize(_ notification: Notification) {
+        // setFrameAutosaveName 在 buildPanel 裡就會發這個通知，那時 panel 還沒指派
+        guard let p = panel, !programmaticResize, p.isVisible else { return }
+        if autoHeight { autoHeight = false; UserDefaults.standard.set(false, forKey: "panel.autoHeight") }
+    }
+
+    @objc private func resumeAutoHeight() {
+        autoHeight = true
+        UserDefaults.standard.set(true, forKey: "panel.autoHeight")
+        fitHeight(to: monitor.contentHeight)
     }
 
     @objc private func statusClicked() {
         if NSApp.currentEvent?.type == .rightMouseUp {
             let menu = NSMenu()
             menu.addItem(withTitle: panel.isVisible ? "隱藏面板" : "顯示面板", action: #selector(togglePanel), keyEquivalent: "")
+            if !autoHeight { menu.addItem(withTitle: "高度恢復自動", action: #selector(resumeAutoHeight), keyEquivalent: "") }
             menu.addItem(.separator())
             menu.addItem(withTitle: "重啟面板", action: #selector(relaunch), keyEquivalent: "")
             menu.addItem(withTitle: "結束 cool91 面板", action: #selector(quit), keyEquivalent: "")
@@ -97,6 +130,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     @objc func togglePanel() { panel.isVisible ? hidePanel() : showPanel() }
     func showPanel() {
         panel.orderFront(nil)
+        fitHeight(to: monitor.contentHeight)
         UserDefaults.standard.set(true, forKey: "panel.open")
         monitor.tick()
     }
@@ -123,6 +157,10 @@ final class Monitor {
     @ObservationIgnored weak var panelWindow: NSWindow? = nil
     @ObservationIgnored var onTick: (() -> Void)? = nil   // 每輪取樣後更新選單列標題
     @ObservationIgnored var onHide: (() -> Void)? = nil   // 面板右上角 ✕
+    @ObservationIgnored var onContentHeight: ((CGFloat) -> Void)? = nil
+    @ObservationIgnored var contentHeight: CGFloat = 0 {
+        didSet { if contentHeight != oldValue { onContentHeight?(contentHeight) } }
+    }
     let intervalOpen: TimeInterval = 3
     let intervalIdle: TimeInterval = 5
     private var timer: Timer?
@@ -398,6 +436,11 @@ struct PanelView: View {
     var body: some View {
         ScrollView(.vertical, showsIndicators: true) {
             content
+                .background(GeometryReader { g in
+                    Color.clear
+                        .onAppear { monitor.contentHeight = g.size.height }
+                        .onChange(of: g.size.height) { _, h in monitor.contentHeight = h }
+                })
         }
         .frame(width: AppDelegate.panelWidth)
         .preferredColorScheme(.dark)
