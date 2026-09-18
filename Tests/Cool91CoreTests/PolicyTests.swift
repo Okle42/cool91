@@ -51,6 +51,12 @@ final class PolicyTests: XCTestCase {
         XCTAssertTrue(Policy.commandNeedsBoost("echo 'x' | ffmpeg -i - out.mp4", keywords: boost))
     }
 
+    func testBoostKeywordIsTheKeywordNotTheCommand() {
+        XCTAssertEqual(Policy.boostKeyword("export TOKEN=sk-secret && swift build -c release", keywords: boost), "swift build")
+        XCTAssertEqual(Policy.boostKeyword("cd /x && ~/.venvs/d/bin/python -m pytest", keywords: boost), "python -m")
+        XCTAssertNil(Policy.boostKeyword("ls -la", keywords: boost))
+    }
+
     func testSegmentsRespectQuotes() {
         XCTAssertEqual(Policy.segments("echo 'a;b' && ls").map { $0[0] }, ["echo", "ls"])
         XCTAssertEqual(Policy.segments("echo \"a|b\\\"c\" | grep x").map { $0[0] }, ["echo", "grep"])

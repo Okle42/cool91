@@ -88,10 +88,17 @@ public enum Policy {
 
     /// 指令是否看起來是重工作（要預熱）。只看每段指令的開頭三個 token，不掃整段文字、不看 heredoc 內容與引號裡的字
     public static func commandNeedsBoost(_ command: String, keywords: [String]) -> Bool {
-        segments(command).contains { tokens in
+        boostKeyword(command, keywords: keywords) != nil
+    }
+
+    /// 命中的那個關鍵字（例如 "swift build"）。hook 只把這個寫進事件備註 —— 指令原文可能帶 token、路徑，
+    /// 不能落到所有人都讀得到的 /var/log/cool91.log
+    public static func boostKeyword(_ command: String, keywords: [String]) -> String? {
+        for tokens in segments(command) {
             let head = tokens.prefix(3).joined(separator: " ").lowercased() + " "
-            return keywords.contains { head.hasPrefix($0.lowercased()) }
+            if let k = keywords.first(where: { head.hasPrefix($0.lowercased()) }) { return k.trimmingCharacters(in: .whitespaces) }
         }
+        return nil
     }
 }
 

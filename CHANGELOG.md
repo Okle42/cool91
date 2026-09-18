@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.2 — 2026-09-18
+
+安全審視（「一個 root daemon 會被怎麼看」）修出來的，行為不變。README 新增威脅模型表。
+
+- **執行期檔案搬離 `/tmp`**：快照、歷史、事件目錄改到 root 擁有的 `/var/run/cool91/`。之前在 world-writable 的 `/tmp` 用固定檔名讓 root 寫檔，本機任何程式先放一個 symlink（`/tmp/cool91.json.tmp` → 任意檔）就能讓 root 覆寫；`chmod 1777` 事件目錄同理能把任意目錄變成人人可寫（CWE-59）。guard 啟動改用 `mkdir(2)`＋`lstat` 確認是自己的真目錄，不是就拒絕啟動；寫檔 `O_CREAT|O_EXCL|O_NOFOLLOW`
+- **事件目錄是信任邊界**：1777 → 1733（能丟、不能列）；guard 只收 ≤ 4 KB 普通檔、一輪最多 64 個，不合規的丟棄並記警告；預熱轉速與秒數不信事件值、一律用 config（之前丟 `rpm: 99999` 會照登進 log）；備註在 guard 端去控制字元與換行、限 60 字（之前只在 hook 端處理，直接丟事件檔的人仍能假造 log 行）
+- **log 不再記指令原文**：hook 的預熱備註改成命中的關鍵字（`swift build`），`/var/log/cool91.log` 是 644 全機可讀，指令前 60 字可能帶 token
+- statusline 片段、README、`uninstall.sh` 路徑跟著改；`install-root.sh` 清掉舊的 `/tmp/cool91*`
+- **升級注意**：自己的 statusline 若讀 `/tmp/cool91.json`，改讀 `/var/run/cool91/state.json`
+
 ## 1.0.1 — 2026-09-18
 
 從 2.5 天、8300 行 `/var/log/cool91.log` 讀出來的四個毛病，都修在 guard / hook，面板不動。

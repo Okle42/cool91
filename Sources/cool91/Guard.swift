@@ -38,7 +38,10 @@ func runGuard(config initial: Config, dryRun: Bool, interval: Double) throws {
 
     var config = initial
     var configMtime = Config.mtime(config.loadedFrom)
-    Event.prepareDir()
+    // 執行期目錄（快照、歷史、事件）：必須是 root 自己的真目錄，不然一個 symlink 就能讓 root 覆寫任意檔
+    guard Event.prepareDir() else {
+        throw Cool91Error.usage("\(Snapshot.runDir) 不是 root 擁有的目錄（被換成 symlink 或別人的？），拒絕啟動。移除它再重啟 guard")
+    }
     // 硬體頻率與 thermal pressure：root 才讀得到（powermetrics）
     let freq = FreqReader(interval: interval)
     let gpuStats = GPUStats()
@@ -113,14 +116,17 @@ func runGuard(config initial: Config, dryRun: Bool, interval: Double) throws {
             }
         }
 
-        // 收 hook / 面板丟過來的事件
-        for e in Event.drain() {
+        // 收 hook / 面板丟過來的事件。事件目錄任何本機程式都能丟，所以事件只表達「要預熱」，
+        // 轉速與秒數一律用 root 自己讀的 config，不信事件檔裡的值（否則丟 rpm 99999 / seconds 1e9 就能讓風扇永遠轟）
+        let events = Event.drain()
+        if Event.lastDropped > 0 { log("⚠️ 事件目錄有 \(Event.lastDropped) 個不合規檔案（symlink / 太大 / 不是事件 JSON），已丟棄") }
+        for e in events {
             switch e.kind {
             case .boost:
-                let until = e.time.addingTimeInterval(e.seconds ?? config.boostSeconds)
+                let until = min(e.time, Date()).addingTimeInterval(config.boostSeconds)
                 if boostUntil == nil { boostStart = Date() }
                 if boostUntil == nil || until > boostUntil! { boostUntil = until }
-                boostRPM = max(boostRPM, e.rpm ?? config.boostRPM)
+                boostRPM = config.boostRPM
                 stats.boosts += 1
                 log("預熱 \(Int(boostRPM)) rpm 到 \(GuardLog.stamp.string(from: boostUntil!))：\(e.note ?? "")")
             case .hookWait: stats.hookWaits += 1

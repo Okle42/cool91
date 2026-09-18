@@ -19,6 +19,8 @@ chown root:wheel /Library/LaunchDaemons/com.cool91.guard.plist
 # bootout 後 guard 要先把風扇交還再退出，launchd 還沒清完就 bootstrap 會回 5 (I/O error)，等它真的消失再裝
 launchctl bootout system/com.cool91.guard 2>/dev/null || true
 for _ in $(seq 1 20); do launchctl print system/com.cool91.guard >/dev/null 2>&1 || break; sleep 0.5; done
+# 1.0.2 以前的執行期檔案放 /tmp（有 symlink 風險）。舊 guard 結束時還會寫最後一次快照，所以要等它停了才清；新版寫 /var/run/cool91
+rm -rf /tmp/cool91.json /tmp/cool91.json.tmp /tmp/cool91.history.json /tmp/cool91.history.json.tmp /tmp/cool91.events
 for i in 1 2 3; do
   launchctl bootstrap system /Library/LaunchDaemons/com.cool91.guard.plist && break
   echo "bootstrap 失敗，重試 $i…"; sleep 2

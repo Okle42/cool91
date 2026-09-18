@@ -76,8 +76,8 @@ public struct Snapshot: Codable {
         }
 
         public func persist() {
-            try? FileManager.default.createDirectory(atPath: (Stats.persistPath as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
-            guard let d = try? JSONEncoder().encode(self) else { return }
+            guard Snapshot.ensureDir((Stats.persistPath as NSString).deletingLastPathComponent, mode: 0o755),
+                  let d = try? JSONEncoder().encode(self) else { return }
             Snapshot.atomicWrite(d, to: Stats.persistPath)
         }
     }
@@ -118,7 +118,10 @@ public struct Snapshot: Codable {
         self.fans = fans; self.level = level; self.guardRunning = guardRunning; self.guardTargetRPM = guardTargetRPM
     }
 
-    public static let statePath = "/tmp/cool91.json"
+    /// 執行期檔案全部放在 root 擁有的目錄（755）：大家都讀得到，但只有 guard 寫得進去。
+    /// 以前放 /tmp —— world-writable 目錄裡用固定檔名讓 root 寫檔，本機任何程式先放一個 symlink 就能讓 root 覆寫任意檔（CWE-59）
+    public static let runDir = "/var/run/cool91"
+    public static let statePath = runDir + "/state.json"
 
     /// 直接從 SMC 取樣（讀取不需 root）。keys 先掃描一次後快取，避免每次列舉 1375 個 key
     public static var cachedCPUKeys: [String] = []
@@ -198,12 +201,36 @@ public struct Snapshot: Codable {
         Snapshot.atomicWrite(d, to: Snapshot.statePath)
     }
 
-    /// 先寫 .tmp 再 rename，讀的人永遠不會看到半截檔案
+    /// 先寫 .tmp 再 rename，讀的人永遠不會看到半截檔案。
+    /// 目錄本身只有 root 能寫，這裡再加一層：O_EXCL|O_NOFOLLOW 建新檔，.tmp 已存在（上次沒寫完的殘留、或有人放了東西）就先拿掉，
+    /// 絕不 follow symlink、絕不寫進別人先建好的檔案
     static func atomicWrite(_ d: Data, to path: String) {
         let tmp = path + ".tmp"
-        try? d.write(to: URL(fileURLWithPath: tmp))
-        chmod(tmp, 0o644)
-        rename(tmp, path)
+        var fd = open(tmp, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o644)
+        if fd < 0 && errno == EEXIST { unlink(tmp); fd = open(tmp, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o644) }
+        guard fd >= 0 else { return }
+        let ok = d.withUnsafeBytes { buf -> Bool in
+            var off = 0
+            while off < buf.count {
+                let n = write(fd, buf.baseAddress! + off, buf.count - off)
+                if n <= 0 { return false }
+                off += n
+            }
+            return true
+        }
+        close(fd)
+        if ok { rename(tmp, path) } else { unlink(tmp) }
+    }
+
+    /// 建執行期目錄：mkdir(2) 加 lstat 確認拿到的是自己的真目錄（不是 symlink、不是別人的；guard 是 root 所以就是 root 的），
+    /// 不對就回 false，呼叫端不該再往裡面寫任何東西
+    @discardableResult
+    public static func ensureDir(_ path: String, mode: mode_t) -> Bool {
+        if mkdir(path, mode) != 0 && errno != EEXIST { return false }
+        var st = stat()
+        guard lstat(path, &st) == 0, (st.st_mode & S_IFMT) == S_IFDIR, st.st_uid == getuid() else { return false }
+        if (st.st_mode & 0o7777) != mode { chmod(path, mode) }   // 目錄是自己的才動權限
+        return true
     }
 
     public var json: String {
@@ -278,7 +305,7 @@ public struct HistoryPoint: Codable {
 }
 
 public enum History {
-    public static let path = "/tmp/cool91.history.json"
+    public static let path = Snapshot.runDir + "/history.json"
     public static let keep: TimeInterval = 300
 
     public static func load() -> [HistoryPoint] {
@@ -297,7 +324,8 @@ public enum History {
 // MARK: - 事件（hook / 面板 → guard 的單向訊息）
 
 /// 非 root 的程式要告訴 guard 一些事（預熱、統計）時寫一個小檔到這個目錄，guard 每輪讀完就刪。
-/// 目錄由 guard 建立並設 1777，任何使用者都可以丟檔案進來
+/// 目錄由 guard 建立並設 1733：任何使用者都可以丟檔案進來，但看不到也動不了別人丟的。
+/// 這是 guard 的信任邊界 —— 本機任何程式都能丟，所以 guard 只收普通小檔、欄位夾範圍、備註去控制字元
 public struct Event: Codable {
     public enum Kind: String, Codable { case boost, hookWait, hookDeny }
     public var kind: Kind
@@ -306,7 +334,7 @@ public struct Event: Codable {
     public var seconds: Double? = nil
     public var note: String? = nil
 
-    public static let dir = "/tmp/cool91.events"
+    public static let dir = Snapshot.runDir + "/events"
 
     public init(kind: Kind, rpm: Double? = nil, seconds: Double? = nil, note: String? = nil) {
         self.kind = kind; self.time = Date(); self.rpm = rpm; self.seconds = seconds; self.note = note
@@ -322,22 +350,43 @@ public struct Event: Codable {
         return FileManager.default.createFile(atPath: Event.dir + "/" + name, contents: d, attributes: [.posixPermissions: 0o644])
     }
 
-    /// guard 用：把目錄裡所有事件讀出來並刪除
+    public static let maxFileBytes = 4096
+    public static let maxPerRound = 64
+    public static let maxNoteLength = 60
+
+    /// 上一次 drain 丟掉的不合規檔案數（symlink、太大、不是 JSON、超過一輪上限），guard 拿來記一條警告
+    public static var lastDropped = 0
+
+    /// guard 用：把目錄裡所有事件讀出來並刪除。只認 ≤ 4 KB 的普通檔（lstat，不 follow symlink），一輪最多 64 個；其他一律刪掉不看
     public static func drain() -> [Event] {
         guard let names = try? FileManager.default.contentsOfDirectory(atPath: dir) else { return [] }
         let dec = JSONDecoder(); dec.dateDecodingStrategy = .iso8601
         var out: [Event] = []
-        for n in names.sorted() where n.hasSuffix(".json") {
+        var dropped = 0
+        for n in names.sorted() {
             let p = dir + "/" + n
-            if let d = FileManager.default.contents(atPath: p), let e = try? dec.decode(Event.self, from: d) { out.append(e) }
-            try? FileManager.default.removeItem(atPath: p)
+            defer { unlink(p) }
+            var st = stat()
+            guard out.count < maxPerRound, n.hasSuffix(".json"),
+                  lstat(p, &st) == 0, (st.st_mode & S_IFMT) == S_IFREG, st.st_size <= maxFileBytes,
+                  let d = FileManager.default.contents(atPath: p), var e = try? dec.decode(Event.self, from: d)
+            else { dropped += 1; continue }
+            e.note = e.note.map(sanitizeNote)
+            out.append(e)
         }
+        lastDropped = dropped
         return out
     }
 
-    /// guard 啟動時建目錄（1777：任何人可寫、只能刪自己的）
-    public static func prepareDir() {
-        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
-        chmod(dir, 0o1777)
+    /// 備註只留可印字元、一行、最多 60 字（會直接進 /var/log/cool91.log，不能讓人塞換行假造 log 行）
+    static func sanitizeNote(_ raw: String) -> String {
+        String(raw.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) && !CharacterSet.newlines.contains($0) }
+                  .map(Character.init).prefix(maxNoteLength))
+    }
+
+    /// guard 啟動時建目錄；回 false 表示目錄不是 root 自己的真目錄，guard 該拒絕使用
+    @discardableResult
+    public static func prepareDir() -> Bool {
+        Snapshot.ensureDir(Snapshot.runDir, mode: 0o755) && Snapshot.ensureDir(dir, mode: 0o1733)
     }
 }

@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 def cool91_segment():
     try:
-        st = json.load(open("/tmp/cool91.json"))
+        st = json.load(open("/var/run/cool91/state.json"))
         t = datetime.fromisoformat(st["time"].replace("Z", "+00:00"))
         if (datetime.now(timezone.utc) - t).total_seconds() > 30:
             return ""

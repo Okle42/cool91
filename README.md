@@ -81,8 +81,8 @@ Sources/Cool91Core    Swift library：型別解碼、感測器掃描、風扇曲
    ├─► cool91 (CLI)
    │     ├─ guard   root LaunchDaemon，每 5 秒依曲線寫 F0Tg/F0Md
    │     │          常駐一個 powermetrics 子行程讀 P/E-core 硬體頻率與 thermal pressure
-   │     │          寫 /tmp/cool91.json（快照＋頻率＋今日統計）、/tmp/cool91.history.json（5 分鐘曲線）
-   │     │          收 /tmp/cool91.events/ 裡的事件（預熱、hook 統計），log 到 /var/log/cool91.log
+   │     │          寫 /var/run/cool91/state.json（快照＋頻率＋今日統計）、history.json（5 分鐘曲線）
+   │     │          收 /var/run/cool91/events/ 裡的事件（預熱、hook 統計），log 到 /var/log/cool91.log
    │     ├─ hook    Claude Code PreToolUse(Bash) 入口 —— 只讀快照檔，9 ms；重指令丟預熱事件
    │     └─ status / check / wait / fan / sensors / chip / doctor
    │
@@ -94,7 +94,20 @@ Sources/Cool91Core    Swift library：型別解碼、感測器掃描、風扇曲
                       改模式 / 曲線 → 寫 config → guard 偵測 mtime 熱重載
 ```
 
-**權限切分是整個設計的核心**：只有 guard 需要 root（寫 SMC、跑 powermetrics），其他所有東西 —— 面板、hook、statusline —— 都只讀 644 的 JSON 檔。非 root 元件要「告訴」guard 什麼事（面板改曲線、hook 要預熱）一律走檔案：改設定檔，或丟一個小 JSON 到 `/tmp/cool91.events/`（1777 目錄），guard 每輪讀完就刪。
+**權限切分是整個設計的核心**：只有 guard 需要 root（寫 SMC、跑 powermetrics），其他所有東西 —— 面板、hook、statusline —— 都只讀 644 的 JSON 檔。非 root 元件要「告訴」guard 什麼事（面板改曲線、hook 要預熱）一律走檔案：改設定檔，或丟一個小 JSON 到 `/var/run/cool91/events/`（1733 目錄：能丟、不能看別人的），guard 每輪讀完就刪。
+
+**威脅模型（root daemon 該被怎麼看）**
+
+| 誰能碰到什麼 | 最壞能做到 | 為什麼止於此 |
+|---|---|---|
+| 本機任何程式 → `/var/run/cool91/events/`（1733） | 讓風扇轟 `boostRPM` 兩分鐘、統計灌水 | guard 只收 ≤ 4 KB 普通檔（lstat，不跟 symlink）、一輪 64 個；轉速與秒數不信事件檔裡的值，一律用 root 自己讀的 config，再夾在韌體 `F0Mn–F0Mx`；備註去控制字元、限 60 字才進 log |
+| 使用者層級程式 → `/etc/cool91/config.json`（使用者可寫，root 讀） | 把曲線壓到最低讓 CPU 降頻、改 hook 白名單 | root **不從 config 取任何路徑或指令去執行**（音檔路徑只有非 root 的面板用）；SMC 韌體自己有過熱保護，最壞是慢，不會壞 |
+| 本機任何程式 → 執行期目錄 | — | `/var/run/cool91` 是 root 755；guard 啟動用 `mkdir(2)`＋`lstat` 確認是自己的真目錄，不是就拒絕啟動；寫檔 `O_EXCL\|O_NOFOLLOW`。1.0.2 以前放 `/tmp`，固定檔名＋symlink 就能讓 root 覆寫任意檔，已搬 |
+| 讀 `/var/log/cool91.log`（644） | 看到誰在什麼時候跑了重指令 | log 只記命中的關鍵字（`swift build`），不記指令原文 —— 原文可能帶 token、私人路徑 |
+| Claude Code hook 的 stdin | — | 只做字串比對決定要不要等，不執行任何東西 |
+| 子行程 | — | `/usr/bin/powermetrics`、`/usr/bin/pgrep` 絕對路徑，不吃 `PATH` |
+
+還沒做的：Developer ID 簽章與 notarization（目前 ad-hoc，`install.sh` 在本機建置後自簽）。
 
 ## 把關邏輯（Claude Code hook）
 
@@ -165,7 +178,7 @@ tail -f /var/log/cool91.log
 
 `cool91_set_fan` 故意不呼叫 `sudo cool91 fan`：guard 每 5 秒會把 SMC 寫回曲線值，直接寫 SMC 只會被蓋掉，而且 AI 不該拿 sudo。手動註冊：`./scripts/install-mcp.sh`。
 
-**Claude Code 狀態列**（選用）：`extras/statusline_snippet.py` 讀 `/tmp/cool91.json` 顯示 `🌡85°🌀4896⚡3.9G`（降頻時 ⚡ 變紅加 ↓），guard 沒在跑就自動隱藏。
+**Claude Code 狀態列**（選用）：`extras/statusline_snippet.py` 讀 `/var/run/cool91/state.json` 顯示 `🌡85°🌀4896⚡3.9G`（降頻時 ⚡ 變紅加 ↓），guard 沒在跑就自動隱藏。
 
 ## 這樣長期跑對機器好嗎？風扇會不會操壞？
 

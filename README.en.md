@@ -81,8 +81,8 @@ Sources/Cool91Core    Swift library: type decoding, sensor scan, fan curve, conf
    ├─► cool91 (CLI)
    │     ├─ guard   root LaunchDaemon; every 5 s writes F0Tg/F0Md from the curve
    │     │          keeps one powermetrics child for P/E-core hardware clocks and thermal pressure
-   │     │          writes /tmp/cool91.json (snapshot + clocks + daily stats), /tmp/cool91.history.json (5-min curves)
-   │     │          consumes events in /tmp/cool91.events/ (pre-warm, hook stats), logs to /var/log/cool91.log
+   │     │          writes /var/run/cool91/state.json (snapshot + clocks + daily stats), history.json (5-min curves)
+   │     │          consumes events in /var/run/cool91/events/ (pre-warm, hook stats), logs to /var/log/cool91.log
    │     ├─ hook    Claude Code PreToolUse(Bash) entry — reads the snapshot only, 9 ms; posts pre-warm events
    │     └─ status / check / wait / fan / sensors / chip / doctor
    │
@@ -94,7 +94,20 @@ Sources/Cool91Core    Swift library: type decoding, sensor scan, fan curve, conf
                       mode / curve edits → write config → guard sees the mtime and reloads
 ```
 
-**Privilege separation is the heart of the design**: only guard needs root (writes SMC, runs powermetrics). Everything else — panel, hook, statusline — reads 644 JSON files. Non-root parts talk to guard through files: edit the config, or drop a small JSON into `/tmp/cool91.events/` (a 1777 directory) that guard reads and deletes each round.
+**Privilege separation is the heart of the design**: only guard needs root (writes SMC, runs powermetrics). Everything else — panel, hook, statusline — reads 644 JSON files. Non-root parts talk to guard through files: edit the config, or drop a small JSON into `/var/run/cool91/events/` (a 1733 directory: anyone can drop, nobody can list) that guard reads and deletes each round.
+
+**Threat model (how a root daemon should be judged)**
+
+| Who reaches what | Worst case | Why it stops there |
+|---|---|---|
+| Any local process → `/var/run/cool91/events/` (1733) | Spin the fan to `boostRPM` for two minutes, inflate stats | guard only accepts regular files ≤ 4 KB (lstat, no symlink following), 64 per round; rpm and duration in the event file are ignored — root uses its own config values, then clamps to firmware `F0Mn–F0Mx`; notes are stripped of control chars and cut to 60 chars before reaching the log |
+| User-level process → `/etc/cool91/config.json` (user-writable, read by root) | Flatten the curve so the CPU throttles, edit the hook allowlist | root **never takes a path or command from the config to execute** (sound paths are used only by the non-root panel); SMC firmware has its own thermal protection — worst case is slow, not broken |
+| Any local process → runtime directory | — | `/var/run/cool91` is root 755; guard creates it with `mkdir(2)` + `lstat` to confirm it owns a real directory and refuses to start otherwise; writes use `O_EXCL\|O_NOFOLLOW`. Before 1.0.2 this lived in `/tmp`, where a fixed name plus a symlink let root overwrite arbitrary files — moved |
+| Reading `/var/log/cool91.log` (644) | See who ran a heavy command when | Only the matched keyword (`swift build`) is logged, never the command itself — it may carry tokens or private paths |
+| Claude Code hook stdin | — | String matching only, decides whether to wait; executes nothing |
+| Subprocesses | — | `/usr/bin/powermetrics`, `/usr/bin/pgrep` by absolute path, `PATH` is not consulted |
+
+Not done yet: Developer ID signing and notarization (currently ad-hoc; `install.sh` builds locally and self-signs).
 
 ## Gate logic (Claude Code hook)
 
@@ -163,7 +176,7 @@ tail -f /var/log/cool91.log
 
 `cool91_set_fan` deliberately does not call `sudo cool91 fan`: guard rewrites the SMC every 5 s from the curve, so a direct write would be overwritten — and an AI shouldn't hold sudo anyway.
 
-**Claude Code statusline** (optional): `extras/statusline_snippet.py` reads `/tmp/cool91.json` and shows `🌡85°🌀4896⚡3.9G`; hides itself when guard isn't running.
+**Claude Code statusline** (optional): `extras/statusline_snippet.py` reads `/var/run/cool91/state.json` and shows `🌡85°🌀4896⚡3.9G`; hides itself when guard isn't running.
 
 ## Is this good for the machine? Will the fan wear out?
 

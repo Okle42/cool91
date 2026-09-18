@@ -23,7 +23,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleExecutable</key><string>cool91-panel</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleVersion</key><string>4</string>
-  <key>CFBundleShortVersionString</key><string>1.0.1</string>
+  <key>CFBundleShortVersionString</key><string>1.0.2</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>LSUIElement</key><true/>
   <key>NSHighResolutionCapable</key><true/>
